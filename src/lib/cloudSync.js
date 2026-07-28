@@ -76,7 +76,7 @@ export const pullCloudState = async (config, table = DEFAULT_SYNC_TABLE, syncId)
   const payload = mergeSnapshots(local, remote.payload);
   const hadLocalDifferences = snapshotsDiffer(local, remote.payload);
 
-  if (payload.advancedState) saveAdvancedState(payload.advancedState);
+  if (payload.advancedState) saveAdvancedState(payload.advancedState, { preserveUpdatedAt: true });
   writeBaseRevision(clientId, remote.revision);
 
   if (hadLocalDifferences && remote.deviceId !== getDeviceId()) {
@@ -128,7 +128,7 @@ export const pushCloudState = async (
   if (error) throw error;
 
   writeBaseRevision(clientId, revision);
-  if (finalPayload.advancedState) saveAdvancedState(finalPayload.advancedState);
+  if (finalPayload.advancedState) saveAdvancedState(finalPayload.advancedState, { preserveUpdatedAt: true });
 
   if (conflict) {
     dispatchConflict({
