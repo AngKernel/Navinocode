@@ -1,9 +1,16 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { Calculator, CheckSquare, Command, Globe, Search, Timer, Wand2 } from 'lucide-react';
+import { Bookmark, Calculator, CheckSquare, Command, Globe, History, PanelsTopLeft, Search, Timer, Wand2 } from 'lucide-react';
 import { Dialog, DialogContent, DialogTitle } from '@/components/ui/dialog';
 import { Input } from '@/components/ui/input';
 import { toast } from 'sonner';
 import { getActiveWorkspace, loadAdvancedState } from './storage';
+import {
+  getBrowserPermissionState,
+  isExtensionRuntime,
+  openBrowserResult,
+  requestBrowserSearchPermissions,
+  searchBrowserData,
+} from './browserData';
 
 const ENGINE_URLS = {
   google: (query) => `https://www.google.com/search?q=${encodeURIComponent(query)}`,
@@ -87,12 +94,17 @@ const resultIcon = (type) => {
   if (type === 'timer') return <Timer className="h-4 w-4" />;
   if (type === 'calc') return <Calculator className="h-4 w-4" />;
   if (type === 'theme') return <Wand2 className="h-4 w-4" />;
+  if (type === 'tab') return <PanelsTopLeft className="h-4 w-4" />;
+  if (type === 'bookmark') return <Bookmark className="h-4 w-4" />;
+  if (type === 'history' || type === 'topSite') return <History className="h-4 w-4" />;
   return <Search className="h-4 w-4" />;
 };
 
 const CommandCenter = ({ open, onOpenChange, extraResults = [], onQueryChange }) => {
   const [query, setQuery] = useState('');
   const [activeIndex, setActiveIndex] = useState(0);
+  const [browserResults, setBrowserResults] = useState([]);
+  const [browserEnabled, setBrowserEnabled] = useState(false);
   const inputRef = useRef(null);
 
   useEffect(() => {
@@ -100,11 +112,31 @@ const CommandCenter = ({ open, onOpenChange, extraResults = [], onQueryChange })
     setQuery('');
     setActiveIndex(0);
     requestAnimationFrame(() => inputRef.current?.focus());
+    getBrowserPermissionState().then((permissions) => {
+      setBrowserEnabled(Object.values(permissions).some(Boolean));
+    });
   }, [open]);
 
   useEffect(() => {
     onQueryChange?.(query);
   }, [query, onQueryChange]);
+
+  useEffect(() => {
+    const normalized = query.trim();
+    if (!open || !browserEnabled || normalized.length < 2) {
+      setBrowserResults([]);
+      return undefined;
+    }
+    let cancelled = false;
+    const timer = setTimeout(async () => {
+      const items = await searchBrowserData(normalized);
+      if (!cancelled) setBrowserResults(items);
+    }, 160);
+    return () => {
+      cancelled = true;
+      clearTimeout(timer);
+    };
+  }, [query, open, browserEnabled]);
 
   const results = useMemo(() => {
     const state = loadAdvancedState();
@@ -178,6 +210,29 @@ const CommandCenter = ({ open, onOpenChange, extraResults = [], onQueryChange })
       }
     }
 
+    const externalItems = browserResults.map((item) => ({
+      ...item,
+      id: `browser-${item.id}`,
+      title: item.title,
+      subtitle: `${item.type === 'tab' ? '标签页' : item.type === 'bookmark' ? '书签' : item.type === 'history' ? '历史记录' : '常用网站'} · ${item.subtitle || ''}`,
+      run: () => openBrowserResult(item),
+    }));
+
+    if (query.trim() && isExtensionRuntime() && !browserEnabled) {
+      items.push({
+        id: 'enable-browser-search',
+        type: 'bookmark',
+        title: '启用浏览器书签与标签页搜索',
+        subtitle: '仅在点击后申请书签、历史、标签页和常用网站权限',
+        keepOpen: true,
+        run: async () => {
+          const granted = await requestBrowserSearchPermissions();
+          setBrowserEnabled(granted);
+          toast(granted ? '浏览器搜索已启用' : '未授予浏览器搜索权限');
+        },
+      });
+    }
+
     if (query.trim() && !direct) {
       const engine = localStorage.getItem('searchEngine') || 'bing';
       items.push({
@@ -187,16 +242,16 @@ const CommandCenter = ({ open, onOpenChange, extraResults = [], onQueryChange })
       });
     }
 
-    return [...items, ...extraResults].slice(0, 12);
-  }, [query, extraResults]);
+    return [...items, ...externalItems, ...extraResults].slice(0, 12);
+  }, [query, browserResults, browserEnabled, extraResults]);
 
   useEffect(() => setActiveIndex(0), [query, extraResults]);
 
   const runAt = (index) => {
     const item = results[index];
     if (!item) return;
-    onOpenChange(false);
-    item.run?.();
+    if (!item.keepOpen) onOpenChange(false);
+    Promise.resolve(item.run?.()).catch((error) => toast(error?.message || '操作失败'));
   };
 
   return (
@@ -221,7 +276,7 @@ const CommandCenter = ({ open, onOpenChange, extraResults = [], onQueryChange })
                 runAt(activeIndex);
               }
             }}
-            placeholder="搜索应用，或输入 g / todo / timer / calc / theme…"
+            placeholder="搜索应用、书签、标签页，或输入 g / todo / timer / calc / theme…"
             className="h-16 border-0 bg-transparent px-0 text-base shadow-none focus-visible:ring-0"
           />
           <kbd className="rounded-lg border px-2 py-1 text-xs text-gray-500">Esc</kbd>
@@ -251,7 +306,7 @@ const CommandCenter = ({ open, onOpenChange, extraResults = [], onQueryChange })
           ))}
         </div>
         <div className="border-t border-gray-200/60 px-4 py-2 text-xs text-gray-500 dark:border-gray-800/70">
-          快捷键：Ctrl/⌘ + K
+          快捷键：Ctrl/⌘ + K；浏览器数据仅在授权后本地读取
         </div>
       </DialogContent>
     </Dialog>
