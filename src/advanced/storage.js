@@ -94,11 +94,11 @@ export const loadAdvancedState = ({ captureLegacy = true } = {}) => {
   return state;
 };
 
-export const saveAdvancedState = (nextState, { writeLegacy = true } = {}) => {
+export const saveAdvancedState = (nextState, { writeLegacy = true, preserveUpdatedAt = false } = {}) => {
   const state = {
     ...nextState,
     schemaVersion: 2,
-    updatedAt: nowIso(),
+    updatedAt: preserveUpdatedAt && nextState.updatedAt ? nextState.updatedAt : nowIso(),
   };
   localStorage.setItem(ADVANCED_STATE_KEY, JSON.stringify(state));
   if (writeLegacy) {
@@ -261,7 +261,7 @@ export const applyFullSnapshot = (snapshot) => {
     if (value === null || value === undefined) return;
     localStorage.setItem(key, String(value));
   });
-  if (snapshot.advancedState) saveAdvancedState(snapshot.advancedState);
+  if (snapshot.advancedState) saveAdvancedState(snapshot.advancedState, { preserveUpdatedAt: true });
   window.dispatchEvent(new CustomEvent('navinocode:snapshot-applied'));
 };
 
