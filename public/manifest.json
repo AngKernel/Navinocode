@@ -4,7 +4,7 @@
   "version": "1.2.1",
   "description": "一个可自定义的新标签页，集成多引擎搜索、快捷应用、待办、番茄钟、主题背景与可选云同步。",
   "author": "Navinocode Team",
-  "homepage_url": "https://github.com/y-shi23/Navinocode",
+  "homepage_url": "https://github.com/AngKernel/Navinocode",
   "chrome_url_overrides": {
     "newtab": "index.html"
   },
