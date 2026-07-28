@@ -11,6 +11,12 @@
   "permissions": [
     "unlimitedStorage"
   ],
+  "optional_permissions": [
+    "bookmarks",
+    "history",
+    "tabs",
+    "topSites"
+  ],
   "host_permissions": [
     "https://*.supabase.co/*",
     "https://*.supabase.in/*",
