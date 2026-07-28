@@ -11,7 +11,8 @@ const META_KEY = 'navinocode_sync_meta';
 const CHUNK_PREFIX = 'navinocode_sync_chunk_';
 const LOCAL_REVISION_KEY = 'navinocode_native_sync_revision';
 const LAST_HASH_KEY = 'navinocode_native_sync_hash';
-const CHUNK_SIZE = 7000;
+const CHUNK_SIZE = 1800;
+const MAX_SYNC_BYTES = 90000;
 
 export const hasNativeSync = () => Boolean(globalThis.chrome?.runtime?.id && globalThis.chrome?.storage?.sync);
 
@@ -56,7 +57,12 @@ const readNativeEnvelope = async () => {
 const writeNativeEnvelope = async (envelope) => {
   const oldMetaResult = await invoke(globalThis.chrome.storage.sync, 'get', META_KEY);
   const oldCount = Number(oldMetaResult?.[META_KEY]?.chunks || 0);
-  const chunks = splitChunks(JSON.stringify(envelope));
+  const serialized = JSON.stringify(envelope);
+  const byteLength = new TextEncoder().encode(serialized).length;
+  if (byteLength > MAX_SYNC_BYTES) {
+    throw new Error('同步数据超过浏览器账户配额，请减少大型待办或自定义应用数据');
+  }
+  const chunks = splitChunks(serialized);
   const values = {
     [META_KEY]: {
       version: 1,
