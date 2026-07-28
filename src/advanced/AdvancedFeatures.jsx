@@ -1,8 +1,11 @@
 import React, { useEffect, useState } from 'react';
 import { Command, LayoutGrid } from 'lucide-react';
 import { Button } from '@/components/ui/button';
+import { toast } from 'sonner';
 import CommandCenter from './CommandCenter';
 import WorkspaceManager from './WorkspaceManager';
+import SyncControls from './SyncControls';
+import { initializeNativeSync } from './nativeSync';
 
 const AdvancedFeatures = () => {
   const [commandOpen, setCommandOpen] = useState(false);
@@ -17,6 +20,19 @@ const AdvancedFeatures = () => {
     };
     window.addEventListener('keydown', onKeyDown);
     return () => window.removeEventListener('keydown', onKeyDown);
+  }, []);
+
+  useEffect(() => initializeNativeSync(), []);
+
+  useEffect(() => {
+    const onConflict = (event) => toast(event.detail?.message || '同步冲突已自动合并');
+    const onNativeApplied = () => toast('浏览器账户有新配置，重新打开新标签页后完全生效');
+    window.addEventListener('navinocode:sync-conflict', onConflict);
+    window.addEventListener('navinocode:native-sync-applied', onNativeApplied);
+    return () => {
+      window.removeEventListener('navinocode:sync-conflict', onConflict);
+      window.removeEventListener('navinocode:native-sync-applied', onNativeApplied);
+    };
   }, []);
 
   return (
@@ -38,7 +54,7 @@ const AdvancedFeatures = () => {
           variant="outline"
           size="icon"
           aria-label="管理工作空间"
-          title="工作空间与文件夹"
+          title="工作空间、文件夹与同步"
           onClick={() => setWorkspaceOpen(true)}
           className="h-10 w-10 rounded-full opacity-70 transition-opacity hover:opacity-100"
         >
@@ -46,7 +62,7 @@ const AdvancedFeatures = () => {
         </Button>
       </div>
       <CommandCenter open={commandOpen} onOpenChange={setCommandOpen} />
-      <WorkspaceManager open={workspaceOpen} onOpenChange={setWorkspaceOpen} />
+      <WorkspaceManager open={workspaceOpen} onOpenChange={setWorkspaceOpen} footer={<SyncControls />} />
     </>
   );
 };
