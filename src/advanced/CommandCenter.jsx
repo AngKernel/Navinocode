@@ -53,11 +53,64 @@ const setPomodoro = (minutes) => {
 };
 
 const calculate = (expression) => {
-  const normalized = String(expression || '').trim();
-  if (!normalized || !/^[0-9+\-*/().%\s]+$/.test(normalized)) return null;
+  const normalized = String(expression || '').replace(/\s+/g, '');
+  if (!normalized || !/^[0-9+\-*/().%]+$/.test(normalized)) return null;
+  const tokens = normalized.match(/\d+(?:\.\d+)?|[()+\-*/%]/g) || [];
+  if (tokens.join('') !== normalized) return null;
+  let index = 0;
+
+  const parsePrimary = () => {
+    const token = tokens[index];
+    if (token === '(') {
+      index += 1;
+      const value = parseExpression();
+      if (tokens[index] !== ')') throw new Error('missing closing parenthesis');
+      index += 1;
+      return value;
+    }
+    if (!/^\d+(?:\.\d+)?$/.test(token || '')) throw new Error('number expected');
+    index += 1;
+    return Number(token);
+  };
+
+  const parseUnary = () => {
+    if (tokens[index] === '+') {
+      index += 1;
+      return parseUnary();
+    }
+    if (tokens[index] === '-') {
+      index += 1;
+      return -parseUnary();
+    }
+    return parsePrimary();
+  };
+
+  const parseTerm = () => {
+    let value = parseUnary();
+    while (['*', '/', '%'].includes(tokens[index])) {
+      const operator = tokens[index++];
+      const right = parseUnary();
+      if (operator === '*') value *= right;
+      else if (operator === '/') value /= right;
+      else value %= right;
+    }
+    return value;
+  };
+
+  const parseExpression = () => {
+    let value = parseTerm();
+    while (['+', '-'].includes(tokens[index])) {
+      const operator = tokens[index++];
+      const right = parseTerm();
+      value = operator === '+' ? value + right : value - right;
+    }
+    return value;
+  };
+
   try {
-    const value = Function(`"use strict"; return (${normalized})`)();
-    return Number.isFinite(value) ? value : null;
+    const value = parseExpression();
+    if (index !== tokens.length || !Number.isFinite(value)) return null;
+    return value;
   } catch {
     return null;
   }
@@ -245,7 +298,7 @@ const CommandCenter = ({ open, onOpenChange, extraResults = [], onQueryChange })
     return [...items, ...externalItems, ...extraResults].slice(0, 12);
   }, [query, browserResults, browserEnabled, extraResults]);
 
-  useEffect(() => setActiveIndex(0), [query, extraResults]);
+  useEffect(() => setActiveIndex(0), [query, browserResults, extraResults]);
 
   const runAt = (index) => {
     const item = results[index];
