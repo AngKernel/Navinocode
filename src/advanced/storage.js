@@ -12,6 +12,7 @@ const safeParse = (value, fallback) => {
 
 const nowIso = () => new Date().toISOString();
 const makeId = (prefix) => `${prefix}-${crypto.randomUUID?.() || `${Date.now()}-${Math.random().toString(16).slice(2)}`}`;
+const sameValue = (left, right) => JSON.stringify(left ?? null) === JSON.stringify(right ?? null);
 
 export const getDeviceId = () => {
   const existing = localStorage.getItem(DEVICE_ID_KEY);
@@ -79,12 +80,13 @@ export const loadAdvancedState = ({ captureLegacy = true } = {}) => {
 
   if (captureLegacy) {
     const index = state.workspaces.findIndex((workspace) => workspace.id === activeWorkspaceId);
-    if (index >= 0 && legacyApps.length > 0) {
+    if (index >= 0 && legacyApps.length > 0 && !sameValue(state.workspaces[index].apps, legacyApps)) {
       state.workspaces[index] = {
         ...state.workspaces[index],
         apps: legacyApps,
         updatedAt: nowIso(),
       };
+      state.updatedAt = nowIso();
     }
   }
 
@@ -112,11 +114,15 @@ export const getActiveWorkspace = (state) =>
 
 export const captureActiveWorkspace = (state) => {
   const apps = readLegacyApps();
+  const active = getActiveWorkspace(state);
+  if (!active || sameValue(active.apps, apps)) return state;
+  const timestamp = nowIso();
   return {
     ...state,
+    updatedAt: timestamp,
     workspaces: state.workspaces.map((workspace) =>
       workspace.id === state.activeWorkspaceId
-        ? { ...workspace, apps, updatedAt: nowIso() }
+        ? { ...workspace, apps, updatedAt: timestamp }
         : workspace
     ),
   };
