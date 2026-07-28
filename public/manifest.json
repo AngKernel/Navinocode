@@ -9,7 +9,8 @@
     "newtab": "index.html"
   },
   "permissions": [
-    "unlimitedStorage"
+    "unlimitedStorage",
+    "storage"
   ],
   "optional_permissions": [
     "bookmarks",
