@@ -139,7 +139,7 @@ export const switchWorkspace = (state, workspaceId) => {
 
 export const addWorkspace = (state, name) => {
   const captured = captureActiveWorkspace(state);
-  const workspace = createWorkspace(name, []);
+  const workspace = createWorkspace(name, readLegacyApps());
   return saveAdvancedState({
     ...captured,
     activeWorkspaceId: workspace.id,
@@ -219,10 +219,11 @@ export const toggleAppInFolder = (state, folderId, appId) => saveAdvancedState({
 
 export const captureFullSnapshot = ({ compact = false } = {}) => {
   const advancedState = captureActiveWorkspace(loadAdvancedState());
-  const cleanApps = (apps) => apps.map((app) => ({
-    ...app,
-    icon: compact && String(app?.icon || '').startsWith('data:') ? '' : app?.icon,
-  }));
+  const cleanApps = (apps) => apps.map((app) => {
+    const clean = { ...app };
+    if (compact && String(clean.icon || '').startsWith('data:')) delete clean.icon;
+    return clean;
+  });
   const cleanAdvanced = {
     ...advancedState,
     workspaces: advancedState.workspaces.map((workspace) => ({ ...workspace, apps: cleanApps(workspace.apps || []) })),
@@ -234,7 +235,7 @@ export const captureFullSnapshot = ({ compact = false } = {}) => {
     componentSettings: safeParse(localStorage.getItem('componentSettings'), {}),
     searchEngine: localStorage.getItem('searchEngine') || 'bing',
     onlineSuggestionsEnabled: localStorage.getItem('onlineSuggestionsEnabled') === 'true',
-    backgroundImage: compact ? '' : (localStorage.getItem('backgroundImage') || ''),
+    ...(compact ? {} : { backgroundImage: localStorage.getItem('backgroundImage') || '' }),
     backgroundBrightness: Number(localStorage.getItem('backgroundBrightness') || 100),
     backgroundBlur: Number(localStorage.getItem('backgroundBlur') || 0),
     backgroundOverlay: Number(localStorage.getItem('backgroundOverlay') || 24),
