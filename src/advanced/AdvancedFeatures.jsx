@@ -4,6 +4,8 @@ import { Button } from '@/components/ui/button';
 import { toast } from 'sonner';
 import CommandCenter from './CommandCenter';
 import WorkspaceManager from './WorkspaceManager';
+import WorkspaceSwitcher from './WorkspaceSwitcher';
+import WorkspaceHomeFolders from './WorkspaceHomeFolders';
 import SyncControls from './SyncControls';
 import { initializeNativeSync } from './nativeSync';
 import { migrateStoredAppIcons } from '@/lib/siteIcons';
@@ -46,7 +48,7 @@ const AdvancedFeatures = () => {
 
   return (
     <>
-      <div className="fixed left-6 top-6 z-20 flex gap-2">
+      <div className="fixed left-6 top-6 z-20 flex max-w-[calc(100vw-3rem)] items-center gap-2">
         <Button
           type="button"
           variant="outline"
@@ -54,10 +56,13 @@ const AdvancedFeatures = () => {
           aria-label="打开命令中心"
           title="命令中心（Ctrl/⌘ + K）"
           onClick={() => setCommandOpen(true)}
-          className="h-10 w-10 rounded-full opacity-70 transition-opacity hover:opacity-100"
+          className="h-10 w-10 shrink-0 rounded-full opacity-80 backdrop-blur-md transition-opacity hover:opacity-100"
         >
           <Command className="h-5 w-5" />
         </Button>
+
+        <WorkspaceSwitcher />
+
         <Button
           type="button"
           variant="outline"
@@ -65,11 +70,13 @@ const AdvancedFeatures = () => {
           aria-label="管理工作空间"
           title="工作空间、文件夹与同步"
           onClick={() => setWorkspaceOpen(true)}
-          className="h-10 w-10 rounded-full opacity-70 transition-opacity hover:opacity-100"
+          className="h-10 w-10 shrink-0 rounded-full opacity-80 backdrop-blur-md transition-opacity hover:opacity-100"
         >
           <LayoutGrid className="h-5 w-5" />
         </Button>
       </div>
+
+      <WorkspaceHomeFolders />
       <CommandCenter open={commandOpen} onOpenChange={setCommandOpen} />
       <WorkspaceManager open={workspaceOpen} onOpenChange={setWorkspaceOpen} footer={<SyncControls />} />
     </>
