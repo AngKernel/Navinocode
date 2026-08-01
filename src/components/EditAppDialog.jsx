@@ -13,6 +13,7 @@ import {
   ICON_MODE_CUSTOM,
   ICON_MODE_LETTER,
   inferIconMode,
+  isSupportedCustomIcon,
   normalizeAppUrl,
 } from '@/lib/siteIcons';
 
@@ -50,6 +51,10 @@ const EditAppDialog = ({ isOpen, setIsOpen, app, setApps }) => {
     if (!app) return;
     if (!normalizedUrl) {
       toast('请输入有效的 http(s) 网站地址');
+      return;
+    }
+    if (iconMode === ICON_MODE_CUSTOM && !isSupportedCustomIcon(icon)) {
+      toast('自定义图标需使用 http(s)、本地资源路径或上传图片');
       return;
     }
 
