@@ -26,6 +26,11 @@ const isHttpUrl = (value) => /^https?:\/\//i.test(String(value || ''));
 const isDataUrl = (value) => String(value || '').startsWith('data:');
 const isLocalAsset = (value) => String(value || '').startsWith('/');
 
+export const isSupportedCustomIcon = (value) => {
+  const icon = String(value || '').trim();
+  return Boolean(icon && (isHttpUrl(icon) || isDataUrl(icon) || isLocalAsset(icon)));
+};
+
 export const normalizeAppUrl = (raw) => {
   const value = String(raw || '').trim();
   if (!value) return '';
@@ -86,9 +91,11 @@ export const inferIconMode = (app) => {
   }
 
   const icon = String(app?.icon || '').trim();
+  const bundledIcon = findBundledIcon(getAppHostname(app?.url));
   if (!icon || isLegacyAutoIcon(icon)) return ICON_MODE_AUTO;
+  if (bundledIcon && icon === bundledIcon) return ICON_MODE_AUTO;
   if (isHttpUrl(icon) || isDataUrl(icon) || isLocalAsset(icon)) return ICON_MODE_CUSTOM;
-  if (findBundledIcon(getAppHostname(app?.url))) return ICON_MODE_AUTO;
+  if (bundledIcon) return ICON_MODE_AUTO;
   return ICON_MODE_LETTER;
 };
 
@@ -103,7 +110,7 @@ export const buildIconFields = ({ url, icon = '', iconMode = ICON_MODE_AUTO }) =
   }
 
   const customIcon = String(icon || '').trim();
-  if (requestedMode === ICON_MODE_CUSTOM && customIcon && (isHttpUrl(customIcon) || isDataUrl(customIcon) || isLocalAsset(customIcon))) {
+  if (requestedMode === ICON_MODE_CUSTOM && isSupportedCustomIcon(customIcon)) {
     const source = isDataUrl(customIcon)
       ? 'upload'
       : isLocalAsset(customIcon)
