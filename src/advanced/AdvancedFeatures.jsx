@@ -6,6 +6,9 @@ import CommandCenter from './CommandCenter';
 import WorkspaceManager from './WorkspaceManager';
 import SyncControls from './SyncControls';
 import { initializeNativeSync } from './nativeSync';
+import { migrateStoredAppIcons } from '@/lib/siteIcons';
+
+const iconMigration = migrateStoredAppIcons();
 
 const AdvancedFeatures = () => {
   const [commandOpen, setCommandOpen] = useState(false);
@@ -23,6 +26,12 @@ const AdvancedFeatures = () => {
   }, []);
 
   useEffect(() => initializeNativeSync(), []);
+
+  useEffect(() => {
+    if (iconMigration.migrated > 0) {
+      toast(`已修复 ${iconMigration.migrated} 个旧版网站图标`);
+    }
+  }, []);
 
   useEffect(() => {
     const onConflict = (event) => toast(event.detail?.message || '同步冲突已自动合并');
