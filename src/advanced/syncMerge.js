@@ -109,7 +109,26 @@ export const mergeSnapshots = (base, incoming) => {
 
   if (advancedState?.activeWorkspaceId) {
     const active = advancedState.workspaces.find((workspace) => workspace.id === advancedState.activeWorkspaceId);
-    if (active) merged.apps = mergeEntityArrays(merged.apps, active.apps, 'app');
+    if (active) {
+      merged.apps = mergeEntityArrays(merged.apps, active.apps, 'app');
+      const settings = safeObject(active.settings);
+      if (Array.isArray(settings.todos)) merged.todos = settings.todos;
+      if (settings.componentSettings) merged.componentSettings = safeObject(settings.componentSettings);
+      [
+        'searchEngine',
+        'onlineSuggestionsEnabled',
+        'backgroundImage',
+        'backgroundBrightness',
+        'backgroundBlur',
+        'backgroundOverlay',
+        'themeMode',
+        'bottomCount',
+        'widgetPositions',
+        'widgetPins',
+      ].forEach((key) => {
+        if (settings[key] !== undefined) merged[key] = settings[key];
+      });
+    }
   }
   return merged;
 };
