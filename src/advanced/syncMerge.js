@@ -44,6 +44,20 @@ const mergeFolders = (base, incoming) => {
   });
 };
 
+const mergeWorkspaceSettings = (base, incoming) => {
+  const left = safeObject(base);
+  const right = safeObject(incoming);
+  return {
+    ...left,
+    ...right,
+    todos: mergeEntityArrays(left.todos, right.todos, 'todo'),
+    componentSettings: {
+      ...safeObject(left.componentSettings),
+      ...safeObject(right.componentSettings),
+    },
+  };
+};
+
 const mergeWorkspaces = (base, incoming) => {
   const workspaces = mergeEntityArrays(base, incoming, 'workspace');
   return workspaces.map((workspace) => {
@@ -55,6 +69,7 @@ const mergeWorkspaces = (base, incoming) => {
       ...workspace,
       apps: mergeEntityArrays(baseWorkspace?.apps, incomingWorkspace?.apps, 'app'),
       folders: mergeFolders(baseWorkspace?.folders, incomingWorkspace?.folders),
+      settings: mergeWorkspaceSettings(baseWorkspace?.settings, incomingWorkspace?.settings),
       updatedAt: incomingWorkspace?.updatedAt || baseWorkspace?.updatedAt || workspace.updatedAt,
     };
   });
@@ -72,7 +87,7 @@ const mergeAdvancedState = (base, incoming) => {
   return {
     ...baseState,
     ...incomingState,
-    schemaVersion: Math.max(Number(baseState.schemaVersion || 0), Number(incomingState.schemaVersion || 0), 2),
+    schemaVersion: Math.max(Number(baseState.schemaVersion || 0), Number(incomingState.schemaVersion || 0), 3),
     activeWorkspaceId,
     workspaces,
     updatedAt: incomingState.updatedAt || baseState.updatedAt,
