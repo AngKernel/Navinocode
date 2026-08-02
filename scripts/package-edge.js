@@ -66,6 +66,15 @@ const run = (command, commandArgs, options = {}) => {
   if (result.status !== 0) fail(`${command} exited with status ${result.status}`);
 };
 
+const runNpmScript = (scriptName) => {
+  if (process.platform === 'win32') {
+    const commandShell = process.env.ComSpec || 'cmd.exe';
+    run(commandShell, ['/d', '/s', '/c', `npm.cmd run ${scriptName}`]);
+    return;
+  }
+  run('npm', ['run', scriptName]);
+};
+
 const getGitValue = (commandArgs) => {
   const result = spawnSync('git', commandArgs, { cwd: rootDir, encoding: 'utf8' });
   return result.status === 0 ? result.stdout.trim() : null;
@@ -105,10 +114,8 @@ if (releaseMode) {
   fail(`package.json version ${packageJson.version} does not match manifest version ${currentVersion}`);
 }
 
-const npmCommand = process.platform === 'win32' ? 'npm.cmd' : 'npm';
-const npmRunOptions = process.platform === 'win32' ? { shell: true } : {};
-run(npmCommand, ['run', 'build:extension'], npmRunOptions);
-run(npmCommand, ['run', 'validate:extension'], npmRunOptions);
+runNpmScript('build:extension');
+runNpmScript('validate:extension');
 
 fs.mkdirSync(releasesDir, { recursive: true });
 if (fs.existsSync(archivePath)) fs.rmSync(archivePath);
