@@ -93,6 +93,13 @@ if (fs.existsSync(iconsSource)) {
   copyDir(iconsSource, iconsDest);
 }
 
+// Copy extension locale messages
+const localesSource = path.join(__dirname, '../public/_locales');
+const localesDest = path.join(extensionDir, '_locales');
+if (fs.existsSync(localesSource)) {
+  copyDir(localesSource, localesDest);
+}
+
 // Copy fonts
 const fontsSource = path.join(__dirname, '../public/fonts');
 const fontsDest = path.join(extensionDir, 'fonts');
