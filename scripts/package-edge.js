@@ -106,8 +106,9 @@ if (releaseMode) {
 }
 
 const npmCommand = process.platform === 'win32' ? 'npm.cmd' : 'npm';
-run(npmCommand, ['run', 'build:extension']);
-run(npmCommand, ['run', 'validate:extension']);
+const npmRunOptions = process.platform === 'win32' ? { shell: true } : {};
+run(npmCommand, ['run', 'build:extension'], npmRunOptions);
+run(npmCommand, ['run', 'validate:extension'], npmRunOptions);
 
 fs.mkdirSync(releasesDir, { recursive: true });
 if (fs.existsSync(archivePath)) fs.rmSync(archivePath);
