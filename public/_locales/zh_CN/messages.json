@@ -1,0 +1,10 @@
+{
+  "extensionName": {
+    "message": "Navinocode",
+    "description": "扩展名称"
+  },
+  "extensionDescription": {
+    "message": "可自定义的 Edge 新标签页，支持命令搜索、工作空间、应用文件夹、待办、番茄钟和可选跨设备同步。",
+    "description": "扩展短说明"
+  }
+}
