@@ -1,19 +1,36 @@
 # Navinocode
 
-Navinocode 是一个可自定义的新标签页，支持多引擎搜索、快捷应用、待办事项、番茄钟、使用热力图、主题背景和可选的 Supabase 云同步。项目既可以作为普通 Web 页面运行，也可以构建为 Microsoft Edge / Chromium Manifest V3 扩展。
+Navinocode 是一个可自定义的新标签页，支持命令搜索、多引擎搜索、快捷应用、工作空间、待办事项、番茄钟、使用热力图、主题背景和可选同步。项目既可以作为普通 Web 页面运行，也可以构建为 Microsoft Edge / Chromium Manifest V3 扩展。
 
 项目采用 MIT License。
 
 ## 功能
 
 - Google、Bing、百度和 DuckDuckGo 多引擎搜索
+- `Ctrl/⌘ + K` 命令中心，统一搜索应用并执行搜索、待办、番茄钟、计算和主题命令
 - 搜索历史和本地应用统一检索；可选择开启 Bing 在线搜索建议（默认关闭）
+- 扩展模式下可按需授权并搜索当前标签页、书签、历史记录和常用网站
 - 可拖动、排序和编辑的应用 Dock
+- 多工作空间、应用文件夹和独立应用布局
 - 待办、番茄钟和使用热力图小组件
 - 浅色、深色、跟随系统主题及自定义背景
 - 本地配置 JSON 导入和导出
-- 可选的用户自有 Supabase 云同步
+- 可选的用户自有 Supabase 云同步，带 revision 和跨设备冲突合并
+- 可选的 Edge/Chromium 浏览器账户原生同步
 - Edge/Chromium 新标签页扩展构建与商店 ZIP 打包
+
+### 命令中心示例
+
+```text
+g React hooks       使用 Google 搜索
+b Edge 扩展开发      使用 Bing 搜索
+bd 北京天气          使用百度搜索
+ddg privacy         使用 DuckDuckGo 搜索
+todo 写周报          新建待办
+timer 45             设置 45 分钟番茄钟
+calc 120*0.85        计算并复制结果
+theme dark           切换深色主题
+```
 
 ## 开发环境
 
@@ -51,7 +68,8 @@ npm run validate:extension
 1. 开启“开发人员模式”。
 2. 选择“加载解压缩的扩展”。
 3. 选择项目下的 `extension/` 目录。
-4. 新建标签页，检查搜索、应用 Dock、设置面板和小组件。
+4. 新建标签页，检查搜索、命令中心、工作空间、应用 Dock、设置面板和小组件。
+5. 浏览器书签、历史和标签页搜索只有在用户主动授权后才会启用。
 
 `build/` 和 `extension/` 都是生成目录，不应直接编辑或提交。
 
@@ -122,19 +140,24 @@ Edge 清单允许 1～4 个点分隔整数，每段范围为 `0`～`65535`，非
 
 推荐的单一用途描述：
 
-> Navinocode 用一个可自定义的效率导航页替换 Microsoft Edge 新标签页，集中提供网页搜索、常用网站入口和本地效率小组件。
+> Navinocode 用一个可自定义的效率导航页替换 Microsoft Edge 新标签页，集中提供命令搜索、常用网站入口、工作空间和本地效率小组件。
 
 权限说明：
 
 | 权限 | 用途 |
 | --- | --- |
 | `unlimitedStorage` | 在本地保存用户上传的背景图片、应用配置、待办和组件布局，避免较大的图片数据触发普通存储配额。 |
+| `storage` | 仅在用户主动启用浏览器原生同步后，通过 `chrome.storage.sync` 保存轻量配置。 |
+| `bookmarks` | 可选权限，仅在用户主动授权后在命令中心本地搜索书签。 |
+| `history` | 可选权限，仅在用户主动授权后在命令中心本地搜索浏览历史。 |
+| `tabs` | 可选权限，仅在用户主动授权后搜索并切换当前打开的标签页。 |
+| `topSites` | 可选权限，仅在用户主动授权后搜索浏览器常用网站。 |
 | `https://api.github.com/*` | 读取 Navinocode 公开仓库的 Star 数量。 |
 | `https://api.bing.com/*` | 仅在用户主动开启“在线搜索建议”后，将输入内容发送至 Bing 获取搜索建议。该功能默认关闭。 |
 | `https://v1.hitokoto.cn/*` | 获取搜索框占位短句；失败时使用内置文本。 |
-| `https://*.supabase.co/*` 等 | 仅在用户主动填写自己的 Supabase 配置后，同步应用、待办和外观设置。 |
+| `https://*.supabase.co/*` 等 | 仅在用户主动填写自己的 Supabase 配置后，同步应用、待办、工作空间和外观设置。 |
 
-扩展不下载或执行远程代码；上述地址只用于获取数据。图标、背景图片可能从用户配置或界面中明确展示的 HTTPS 地址加载。
+扩展不下载或执行远程代码。书签、历史记录、标签页和常用网站只在本机检索，不会写入 Supabase 或浏览器原生同步。
 
 Microsoft 官方资料：
 
@@ -161,11 +184,23 @@ alter table navinocode_states enable row level security;
 
 当前前端没有 Supabase 登录流程，因此不能仅依赖同步 ID 实现严格的用户身份隔离。不要在同步数据中保存密码、Token、财务信息等敏感数据。公开发布前，应根据自己的 Supabase Auth 方案创建最小权限 RLS；不建议把 `using (true)` 的匿名全表策略用于生产环境。
 
-多台设备填写相同同步 ID 时会使用同一行数据。当前冲突策略为最后写入覆盖，重要配置建议同时保留本地导出文件。
+多台设备填写相同同步 ID 时会使用同一行数据。同步数据包含 revision、deviceId 和更新时间；上传前会读取云端版本。发现其他设备在当前基础版本之后修改过数据时，会合并两端的应用、待办、工作空间和文件夹，再写入新 revision。该策略可以降低整体状态被旧设备直接覆盖的风险，但重要配置仍建议保留本地导出文件。
+
+## 浏览器原生同步
+
+扩展模式下可以选择使用 Edge/Chromium 浏览器账户同步：
+
+- 使用 `chrome.storage.sync`，不需要用户配置第三方数据库。
+- 同步应用、待办、工作空间、文件夹、组件设置和轻量外观设置。
+- 本地背景图片和 data URL 自定义图标不会上传。
+- 数据会分片写入，并在接近浏览器同步配额时停止上传并提示用户。
+- 自动同步仅在扩展新标签页运行期间检查变化，也可以在工作空间面板中手动上传或下载。
+- 与 Supabase 同步使用相同的 revision 和合并思路，发现并发修改时保留两端实体。
 
 ## 目录概览
 
 ```text
+src/advanced/         命令中心、工作空间、浏览器数据和同步模块
 src/                  React 应用代码
 public/manifest.json  Edge/Chromium 扩展清单和版本源
 scripts/              构建、校验和商店打包脚本
@@ -179,7 +214,7 @@ releases/             Edge 商店 ZIP、校验和与构建元数据
 数据处理说明见 [PRIVACY.md](./PRIVACY.md)。提交 Edge Add-ons 前，需要将该文件托管到公开、稳定的 HTTPS URL；仓库公开后可使用：
 
 ```text
-https://github.com/y-shi23/Navinocode/blob/main/PRIVACY.md
+https://github.com/AngKernel/Navinocode/blob/main/PRIVACY.md
 ```
 
 ## 项目来源与许可证

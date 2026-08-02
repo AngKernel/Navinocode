@@ -1,103 +1,98 @@
-import React, { useState } from 'react';
+import React, { useMemo, useState } from 'react';
+import { ImageIcon, RefreshCcw, Type, Upload } from 'lucide-react';
+import { toast } from 'sonner';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog';
-import { Upload } from 'lucide-react';
+import SiteIcon from '@/components/SiteIcon';
+import {
+  buildIconFields,
+  getAppHostname,
+  ICON_MODE_AUTO,
+  ICON_MODE_CUSTOM,
+  ICON_MODE_LETTER,
+  isSupportedCustomIcon,
+  normalizeAppUrl,
+} from '@/lib/siteIcons';
 
-const AddAppDialog = ({ isOpen, setIsOpen, setApps, apps }) => {
+const ICON_MODES = [
+  { id: ICON_MODE_AUTO, label: '自动获取', icon: RefreshCcw },
+  { id: ICON_MODE_CUSTOM, label: '自定义', icon: ImageIcon },
+  { id: ICON_MODE_LETTER, label: '首字母', icon: Type },
+];
+
+const AddAppDialog = ({ isOpen, setIsOpen, setApps }) => {
   const [url, setUrl] = useState('');
   const [name, setName] = useState('');
   const [icon, setIcon] = useState('');
-  const [iconFile, setIconFile] = useState(null);
+  const [iconMode, setIconMode] = useState(ICON_MODE_AUTO);
 
-  // 规范化网址：支持输入 baidu.com / linux.do 等无协议的域名
-  const normalizeUrl = (raw) => {
-    if (!raw) return '';
-    let u = raw.trim();
-    // 如果以 // 开头，补上 https:
-    if (u.startsWith('//')) return `https:${u}`;
-    // 如果没有协议，则默认 https
-    if (!/^https?:\/\//i.test(u)) {
-      u = `https://${u}`;
-    }
-    return u;
-  };
+  const normalizedUrl = normalizeAppUrl(url);
+  const previewName = name.trim() || getAppHostname(normalizedUrl) || '应用';
+  const previewApp = useMemo(() => ({
+    name: previewName,
+    url: normalizedUrl,
+    ...buildIconFields({ url: normalizedUrl, icon, iconMode }),
+  }), [icon, iconMode, normalizedUrl, previewName]);
 
-  const handleSubmit = async (e) => {
-    e.preventDefault();
-    
-    // 生成新的应用ID
-    const newId = Math.max(...apps.map(app => app.id), 0) + 1;
-    
-    // 先对输入的 URL 进行规范化（补全协议）
-    const normalizedUrl = normalizeUrl(url);
-
-    // 确定应用名称
-    let appName = name;
-    if (!appName) {
-      try {
-        const hostname = new URL(normalizedUrl).hostname || '';
-        appName = hostname.replace(/^www\./, '') || '应用';
-      } catch (err) {
-        // new URL 解析失败时回退
-        appName = '应用';
-      }
-    }
-    
-    // 确定图标
-    let appIcon = icon;
-    if (!icon && iconFile) {
-      // 如果上传了文件但没有图标URL，则使用文件（预览使用 dataURL，这里仍存占位标记）
-      appIcon = 'custom';
-    } else if (!icon && !iconFile) {
-      // 图标输入为空时，使用 icon.bqb.cool 提供的网站图标，避免主动 fetch 以规避 CORS，仅通过 <img src> 加载
-      try {
-        const target = normalizedUrl || url;
-        if (target) {
-          appIcon = `https://icon.bqb.cool/?url=${encodeURIComponent(target)}`;
-        } else {
-          // 若无有效网址则回退首字母
-          appIcon = appName.charAt(0).toLowerCase();
-        }
-      } catch {
-        appIcon = appName.charAt(0).toLowerCase();
-      }
-    }
-    
-    const newApp = {
-      id: newId,
-      name: appName,
-      url: normalizedUrl,
-      icon: appIcon
-    };
-    
-    setApps([...apps, newApp]);
-    setIsOpen(false);
-    
-    // 重置表单
+  const resetForm = () => {
     setUrl('');
     setName('');
     setIcon('');
-    setIconFile(null);
+    setIconMode(ICON_MODE_AUTO);
   };
 
-  const handleIconFileChange = (e) => {
-    const file = e.target.files[0];
-    if (file) {
-      setIconFile(file);
-      // 生成预览URL
-      const reader = new FileReader();
-      reader.onload = (event) => {
-        setIcon(event.target.result);
-      };
-      reader.readAsDataURL(file);
+  const handleSubmit = (event) => {
+    event.preventDefault();
+    if (!normalizedUrl) {
+      toast('请输入有效的 http(s) 网站地址');
+      return;
     }
+    if (iconMode === ICON_MODE_CUSTOM && !isSupportedCustomIcon(icon)) {
+      toast('自定义图标需使用 http(s)、本地资源路径或上传图片');
+      return;
+    }
+
+    const appName = name.trim() || getAppHostname(normalizedUrl) || '应用';
+    const iconFields = buildIconFields({ url: normalizedUrl, icon, iconMode });
+    setApps((previous) => {
+      const numericIds = previous.map((app) => Number(app.id)).filter(Number.isFinite);
+      const newId = Math.max(0, ...numericIds) + 1;
+      return [...previous, {
+        id: newId,
+        name: appName,
+        url: normalizedUrl,
+        ...iconFields,
+      }];
+    });
+    setIsOpen(false);
+    resetForm();
+  };
+
+  const handleIconFileChange = (event) => {
+    const file = event.target.files?.[0];
+    event.target.value = '';
+    if (!file) return;
+    if (!file.type.startsWith('image/')) {
+      toast('请选择图片文件');
+      return;
+    }
+
+    const reader = new FileReader();
+    reader.onload = (loadEvent) => {
+      setIcon(String(loadEvent.target?.result || ''));
+      setIconMode(ICON_MODE_CUSTOM);
+    };
+    reader.readAsDataURL(file);
   };
 
   return (
-    <Dialog open={isOpen} onOpenChange={setIsOpen}>
-      <DialogContent className="max-w-md p-6 rounded-2xl apple-popover">
+    <Dialog open={isOpen} onOpenChange={(open) => {
+      setIsOpen(open);
+      if (!open) resetForm();
+    }}>
+      <DialogContent className="max-w-md rounded-2xl p-6 apple-popover">
         <DialogHeader>
           <DialogTitle>添加新应用</DialogTitle>
         </DialogHeader>
@@ -109,69 +104,91 @@ const AddAppDialog = ({ isOpen, setIsOpen, setApps, apps }) => {
               type="text"
               placeholder="例如：linux.do"
               value={url}
-              onChange={(e) => setUrl(e.target.value)}
+              onChange={(event) => setUrl(event.target.value)}
               required
               className="apple-input"
             />
           </div>
-          
+
           <div>
             <Label htmlFor="name">应用名称</Label>
             <Input
               id="name"
               type="text"
-              placeholder="留空则自动获取"
+              placeholder="留空则使用网站域名"
               value={name}
-              onChange={(e) => setName(e.target.value)}
+              onChange={(event) => setName(event.target.value)}
               className="apple-input"
             />
           </div>
-          
-          <div>
-            <Label htmlFor="icon">图标URL</Label>
-            <div className="relative">
-              <Input
-                id="icon"
-                type="text"
-                placeholder="留空则自动获取网站图标"
-                value={icon}
-                onChange={(e) => setIcon(e.target.value)}
-                className="apple-input pr-10"
-              />
-              <label 
-                htmlFor="icon-upload" 
-                className="absolute right-2 top-1/2 transform -translate-y-1/2 cursor-pointer p-1 rounded hover:bg-gray-200 dark:hover:bg-gray-700"
-              >
-                <Upload size={16} className="text-gray-500 dark:text-gray-400" />
-              </label>
-              <input
-                id="icon-upload"
-                type="file"
-                accept="image/*"
-                onChange={handleIconFileChange}
-                className="hidden"
-              />
+
+          <div className="space-y-2">
+            <Label>图标来源</Label>
+            <div className="grid grid-cols-3 gap-2">
+              {ICON_MODES.map(({ id, label, icon: ModeIcon }) => (
+                <Button
+                  key={id}
+                  type="button"
+                  variant={iconMode === id ? 'secondary' : 'outline'}
+                  className="h-auto rounded-xl px-2 py-2 text-xs"
+                  onClick={() => setIconMode(id)}
+                >
+                  <ModeIcon className="mr-1 h-3.5 w-3.5" />
+                  {label}
+                </Button>
+              ))}
             </div>
-            {icon && icon.startsWith('data:') && (
-              <div className="mt-2">
-                <img src={icon} alt="预览" className="w-12 h-12 rounded-2xl" />
-              </div>
-            )}
           </div>
-          
+
+          {iconMode === ICON_MODE_CUSTOM ? (
+            <div>
+              <Label htmlFor="icon">图标 URL 或本地图片</Label>
+              <div className="relative">
+                <Input
+                  id="icon"
+                  type="text"
+                  placeholder="https://example.com/icon.png"
+                  value={icon}
+                  onChange={(event) => setIcon(event.target.value)}
+                  className="apple-input pr-10"
+                />
+                <label
+                  htmlFor="icon-upload"
+                  className="absolute right-2 top-1/2 -translate-y-1/2 cursor-pointer rounded p-1 hover:bg-gray-200 dark:hover:bg-gray-700"
+                  title="上传本地图标"
+                >
+                  <Upload size={16} className="text-gray-500 dark:text-gray-400" />
+                </label>
+                <input
+                  id="icon-upload"
+                  type="file"
+                  accept="image/*"
+                  onChange={handleIconFileChange}
+                  className="hidden"
+                />
+              </div>
+            </div>
+          ) : null}
+
+          <div className="flex items-center gap-3 rounded-2xl border border-gray-200/60 bg-white/40 p-3 dark:border-gray-700/60 dark:bg-black/10">
+            <SiteIcon app={previewApp} size={48} />
+            <div className="min-w-0">
+              <div className="truncate text-sm font-medium">{previewName}</div>
+              <div className="truncate text-xs text-gray-500">
+                {iconMode === ICON_MODE_AUTO
+                  ? '按标准化域名自动匹配图标'
+                  : iconMode === ICON_MODE_CUSTOM
+                    ? '使用你提供的图片'
+                    : '使用应用名称首字母'}
+              </div>
+            </div>
+          </div>
+
           <div className="flex justify-end space-x-2 pt-4">
-            <Button
-              type="button"
-              variant="outline"
-              onClick={() => setIsOpen(false)}
-              className="apple-button"
-            >
+            <Button type="button" variant="outline" onClick={() => setIsOpen(false)} className="apple-button">
               取消
             </Button>
-            <Button 
-              type="submit"
-              className="bg-white text-black hover:bg-gray-100 dark:bg-gray-800 dark:text-white dark:hover:bg-gray-700 rounded-2xl px-4 py-2"
-            >
+            <Button type="submit" className="rounded-2xl bg-white px-4 py-2 text-black hover:bg-gray-100 dark:bg-gray-800 dark:text-white dark:hover:bg-gray-700">
               添加应用
             </Button>
           </div>
