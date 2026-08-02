@@ -37,6 +37,8 @@ const readPngSize = (filePath) => {
   return { width: buffer.readUInt32BE(16), height: buffer.readUInt32BE(20) };
 };
 
+const getMessageKey = (value) => /^__MSG_([^_].*?)__$/.exec(value || '')?.[1] || '';
+
 console.log('Validating Edge/Chromium extension package');
 
 const requiredFiles = [
@@ -65,6 +67,24 @@ try {
   check(Boolean(manifest.chrome_url_overrides?.newtab), `New tab: ${manifest.chrome_url_overrides?.newtab}`, 'chrome_url_overrides.newtab is required');
   check(!manifest.update_url, 'No external update_url', 'store releases must not define an external update_url');
 
+  const defaultLocale = manifest.default_locale || '';
+  const nameMessageKey = getMessageKey(manifest.name);
+  const descriptionMessageKey = getMessageKey(manifest.description);
+  check(defaultLocale === 'zh_CN', 'Default locale: zh_CN', 'default_locale must be zh_CN for the Simplified Chinese store listing');
+  check(Boolean(nameMessageKey), 'Name uses an i18n message', 'name must use a __MSG_*__ localization placeholder');
+  check(Boolean(descriptionMessageKey), 'Description uses an i18n message', 'description must use a __MSG_*__ localization placeholder');
+
+  const localeFile = path.join(extensionDir, '_locales', defaultLocale, 'messages.json');
+  check(fs.existsSync(localeFile), `_locales/${defaultLocale}/messages.json exists`, `locale messages are missing for ${defaultLocale}`);
+  if (fs.existsSync(localeFile)) {
+    const messages = JSON.parse(fs.readFileSync(localeFile, 'utf8'));
+    const localizedName = messages[nameMessageKey]?.message;
+    const localizedDescription = messages[descriptionMessageKey]?.message;
+    check(Boolean(localizedName?.trim()), `Localized name: ${localizedName}`, `message ${nameMessageKey} is missing`);
+    check(Boolean(localizedDescription?.trim()), 'Localized description is present', `message ${descriptionMessageKey} is missing`);
+    check((localizedDescription?.length || 0) <= 132, 'Localized description length is valid', 'localized description must not exceed 132 characters');
+  }
+
   const iconEntries = ['16', '32', '48', '128'].map((size) => [Number(size), manifest.icons?.[size]]).filter(([, iconPath]) => Boolean(iconPath));
   check(iconEntries.length === 4, 'Required icon sizes are declared', 'icons 16, 32, 48, and 128 must be declared');
   for (const [expectedSize, iconPath] of iconEntries) {
@@ -86,7 +106,7 @@ try {
   const hostPermissions = manifest.host_permissions || [];
   check(hostPermissions.every((permission) => permission.startsWith('https://')), 'Host permissions use HTTPS', 'all host permissions must use HTTPS');
 } catch (error) {
-  check(false, '', `manifest.json is invalid: ${error.message}`);
+  check(false, '', `manifest.json or locale messages are invalid: ${error.message}`);
 }
 
 console.log('\nHTML and generated files:');
