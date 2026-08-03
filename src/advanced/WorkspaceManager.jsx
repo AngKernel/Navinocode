@@ -101,10 +101,10 @@ const WorkspaceManager = ({ open, onOpenChange, footer = null }) => {
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-h-[86vh] max-w-4xl overflow-hidden rounded-3xl p-0">
+      <DialogContent className="h-[86vh] max-h-[760px] max-w-4xl gap-0 overflow-hidden rounded-3xl p-0">
         <DialogTitle className="sr-only">工作空间和文件夹</DialogTitle>
-        <div className="grid min-h-[620px] grid-cols-1 md:grid-cols-[220px_1fr]">
-          <aside className="border-b bg-gray-50/80 p-4 dark:bg-gray-950/60 md:border-b-0 md:border-r">
+        <div className="grid h-full min-h-0 grid-cols-1 grid-rows-[auto_minmax(0,1fr)] md:grid-cols-[220px_minmax(0,1fr)] md:grid-rows-1">
+          <aside className="min-h-0 overflow-y-auto border-b bg-gray-50/80 p-4 dark:bg-gray-950/60 md:border-b-0 md:border-r">
             <div className="mb-4 flex items-center gap-2 text-sm font-semibold">
               <LayoutGrid className="h-4 w-4" />工作空间
             </div>
@@ -150,7 +150,7 @@ const WorkspaceManager = ({ open, onOpenChange, footer = null }) => {
             </div>
           </aside>
 
-          <main className="overflow-y-auto p-5">
+          <main className="min-h-0 overflow-y-auto overscroll-contain p-5">
             <div className="flex flex-col gap-3 border-b pb-5 sm:flex-row sm:items-end">
               <div className="flex-1">
                 <Label htmlFor="workspace-name">当前工作空间</Label>
