@@ -8,6 +8,7 @@ import WorkspaceSwitcher from './WorkspaceSwitcher';
 import WorkspaceHomeFolders from './WorkspaceHomeFolders';
 import SyncControls from './SyncControls';
 import { initializeNativeSync } from './nativeSync';
+import { finalizeWorkspaceMigration } from './storage';
 import { migrateStoredAppIcons } from '@/lib/siteIcons';
 
 const iconMigration = migrateStoredAppIcons();
@@ -27,7 +28,13 @@ const AdvancedFeatures = () => {
     return () => window.removeEventListener('keydown', onKeyDown);
   }, []);
 
-  useEffect(() => initializeNativeSync(), []);
+  useEffect(() => {
+    if (finalizeWorkspaceMigration()) {
+      window.location.reload();
+      return undefined;
+    }
+    return initializeNativeSync();
+  }, []);
 
   useEffect(() => {
     if (iconMigration.migrated > 0) {
