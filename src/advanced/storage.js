@@ -1,6 +1,8 @@
 const ADVANCED_STATE_KEY = 'navinocode_advanced_state';
 const DEVICE_ID_KEY = 'navinocode_device_id';
 const NATIVE_SYNC_ENABLED_KEY = 'navinocode_native_sync_enabled';
+const WORKSPACE_MIGRATION_KEY = 'navinocode_workspace_schema_v4_reload';
+const SCHEMA_VERSION = 4;
 
 const WORKSPACE_SETTING_DEFAULTS = {
   todos: [],
@@ -37,6 +39,15 @@ const clampNumber = (value, fallback, min = -Infinity, max = Infinity) => {
   const parsed = Number(value);
   return Number.isFinite(parsed) ? Math.min(max, Math.max(min, parsed)) : fallback;
 };
+
+const normalizeAppId = (value) => String(value ?? '');
+const normalizeTombstoneGroup = (value) => (value && typeof value === 'object' && !Array.isArray(value) ? { ...value } : {});
+const normalizeTombstones = (value) => ({
+  workspaces: normalizeTombstoneGroup(value?.workspaces),
+  folders: normalizeTombstoneGroup(value?.folders),
+  apps: normalizeTombstoneGroup(value?.apps),
+});
+const entityKey = (workspaceId, entityId) => `${String(workspaceId)}:${String(entityId)}`;
 
 export const getDeviceId = () => {
   const existing = localStorage.getItem(DEVICE_ID_KEY);
@@ -178,38 +189,108 @@ export const applyWorkspaceSettings = (settings, appCount = 0) => {
   localStorage.setItem('pomodoro_minutes', String(normalized.pomodoroMinutes));
 };
 
+const getRootApps = (workspace) => (
+  Array.isArray(workspace?.apps)
+    ? workspace.apps.filter((app) => !app?.folderId).map((app) => ({ ...app, folderId: null }))
+    : []
+);
+
 const applyWorkspaceToLocal = (workspace) => {
   if (!workspace) return;
-  const apps = Array.isArray(workspace.apps) ? workspace.apps : [];
+  const apps = getRootApps(workspace);
   localStorage.setItem('apps', JSON.stringify(apps));
   applyWorkspaceSettings(workspace.settings, apps.length);
 };
 
-export const createWorkspace = (name, apps = [], settings = readWorkspaceSettings()) => ({
+export const createWorkspace = (name, apps = [], settings = readWorkspaceSettings(), folders = []) => ({
   id: makeId('workspace'),
   name: String(name || '新工作空间').trim() || '新工作空间',
-  apps: Array.isArray(apps) ? apps : [],
-  folders: [],
+  apps: Array.isArray(apps) ? apps.map((app) => ({ ...app, folderId: app?.folderId || null })) : [],
+  folders: Array.isArray(folders) ? folders : [],
   settings: normalizeWorkspaceSettings(settings),
   createdAt: nowIso(),
   updatedAt: nowIso(),
 });
 
 const normalizeFolder = (folder) => ({
-  id: folder?.id || makeId('folder'),
-  name: String(folder?.name || '文件夹'),
-  appIds: Array.isArray(folder?.appIds) ? [...new Set(folder.appIds.map(String))] : [],
+  id: String(folder?.id || makeId('folder')),
+  name: String(folder?.name || '文件夹').trim() || '文件夹',
 });
 
-const normalizeWorkspace = (workspace, fallbackApps = [], fallbackSettings = WORKSPACE_SETTING_DEFAULTS) => ({
-  id: workspace?.id || makeId('workspace'),
-  name: String(workspace?.name || '工作空间'),
-  apps: Array.isArray(workspace?.apps) ? workspace.apps : fallbackApps,
-  folders: Array.isArray(workspace?.folders) ? workspace.folders.map(normalizeFolder) : [],
-  settings: normalizeWorkspaceSettings(workspace?.settings, fallbackSettings),
-  createdAt: workspace?.createdAt || nowIso(),
-  updatedAt: workspace?.updatedAt || nowIso(),
-});
+const normalizeWorkspace = (workspace, fallbackApps = [], fallbackSettings = WORKSPACE_SETTING_DEFAULTS) => {
+  const rawFolders = Array.isArray(workspace?.folders) ? workspace.folders : [];
+  const folders = rawFolders.map(normalizeFolder);
+  const validFolderIds = new Set(folders.map((folder) => folder.id));
+  const legacyMembership = new Map();
+
+  rawFolders.forEach((folder) => {
+    const folderId = String(folder?.id || '');
+    if (!validFolderIds.has(folderId) || !Array.isArray(folder?.appIds)) return;
+    folder.appIds.forEach((appId) => {
+      const id = String(appId);
+      if (!legacyMembership.has(id)) legacyMembership.set(id, folderId);
+    });
+  });
+
+  const sourceApps = Array.isArray(workspace?.apps) ? workspace.apps : fallbackApps;
+  const apps = sourceApps.map((app) => {
+    const explicitFolderId = app?.folderId == null ? null : String(app.folderId);
+    const migratedFolderId = legacyMembership.get(normalizeAppId(app?.id)) || null;
+    const folderId = explicitFolderId && validFolderIds.has(explicitFolderId)
+      ? explicitFolderId
+      : migratedFolderId && validFolderIds.has(migratedFolderId)
+        ? migratedFolderId
+        : null;
+    return { ...app, folderId };
+  });
+
+  return {
+    id: String(workspace?.id || makeId('workspace')),
+    name: String(workspace?.name || '工作空间').trim() || '工作空间',
+    apps,
+    folders,
+    settings: normalizeWorkspaceSettings(workspace?.settings, fallbackSettings),
+    createdAt: workspace?.createdAt || nowIso(),
+    updatedAt: workspace?.updatedAt || nowIso(),
+  };
+};
+
+const reconcileLiveRootApps = (workspace, liveApps, reservedIds = []) => {
+  if (!workspace) return workspace;
+  const liveRoot = (Array.isArray(liveApps) ? liveApps : []).map((app) => ({ ...app, folderId: null }));
+  const liveById = new Map(liveRoot.map((app) => [normalizeAppId(app.id), app]));
+  const folderedIds = new Set(
+    (workspace.apps || []).filter((app) => app?.folderId).map((app) => normalizeAppId(app.id)),
+  );
+  const usedIds = new Set([...folderedIds, ...reservedIds.map(String)]);
+  const apps = [];
+
+  (workspace.apps || []).forEach((app) => {
+    if (app?.folderId) {
+      apps.push(app);
+      return;
+    }
+    const id = normalizeAppId(app?.id);
+    const live = liveById.get(id);
+    if (!live) return;
+    apps.push({ ...live, folderId: null });
+    usedIds.add(id);
+    liveById.delete(id);
+  });
+
+  liveById.forEach((live) => {
+    let next = { ...live, folderId: null };
+    let id = normalizeAppId(next.id);
+    if (!id || usedIds.has(id)) {
+      next = { ...next, id: makeId('app') };
+      id = normalizeAppId(next.id);
+    }
+    usedIds.add(id);
+    apps.push(next);
+  });
+
+  return sameValue(workspace.apps, apps) ? workspace : { ...workspace, apps };
+};
 
 export const loadAdvancedState = ({ captureLegacy = true } = {}) => {
   const legacyApps = readLegacyApps();
@@ -219,52 +300,73 @@ export const loadAdvancedState = ({ captureLegacy = true } = {}) => {
   if (!parsed || !Array.isArray(parsed.workspaces) || parsed.workspaces.length === 0) {
     const workspace = createWorkspace('默认', legacyApps, liveSettings);
     const initial = {
-      schemaVersion: 3,
+      schemaVersion: SCHEMA_VERSION,
       activeWorkspaceId: workspace.id,
       workspaces: [workspace],
+      tombstones: normalizeTombstones(),
       updatedAt: nowIso(),
     };
     localStorage.setItem(ADVANCED_STATE_KEY, JSON.stringify(initial));
     return initial;
   }
 
+  const migrated = Number(parsed.schemaVersion || 0) < SCHEMA_VERSION;
   const workspaces = parsed.workspaces.map((workspace) => normalizeWorkspace(workspace, legacyApps, liveSettings));
-  const activeWorkspaceId = workspaces.some((workspace) => workspace.id === parsed.activeWorkspaceId)
-    ? parsed.activeWorkspaceId
+  const activeWorkspaceId = workspaces.some((workspace) => workspace.id === String(parsed.activeWorkspaceId))
+    ? String(parsed.activeWorkspaceId)
     : workspaces[0].id;
-  const state = {
-    schemaVersion: 3,
+  let state = {
+    schemaVersion: SCHEMA_VERSION,
     activeWorkspaceId,
     workspaces,
+    tombstones: normalizeTombstones(parsed.tombstones),
     updatedAt: parsed.updatedAt || nowIso(),
   };
 
-  if (captureLegacy) {
+  if (captureLegacy && !migrated) {
     const index = state.workspaces.findIndex((workspace) => workspace.id === activeWorkspaceId);
     const active = state.workspaces[index];
-    if (index >= 0 && (
-      !sameValue(active.apps, legacyApps) ||
-      !sameValue(active.settings, liveSettings)
-    )) {
-      const timestamp = nowIso();
-      state.workspaces[index] = {
-        ...active,
-        apps: legacyApps,
-        settings: liveSettings,
-        updatedAt: timestamp,
-      };
-      state.updatedAt = timestamp;
+    if (index >= 0) {
+      const reservedIds = Object.keys(state.tombstones.apps)
+        .filter((key) => key.startsWith(`${activeWorkspaceId}:`))
+        .map((key) => key.slice(activeWorkspaceId.length + 1));
+      const reconciled = reconcileLiveRootApps(active, legacyApps, reservedIds);
+      if (!sameValue(reconciled.apps, active.apps) || !sameValue(active.settings, liveSettings)) {
+        const timestamp = nowIso();
+        state = {
+          ...state,
+          updatedAt: timestamp,
+          workspaces: state.workspaces.map((workspace, workspaceIndex) => workspaceIndex === index
+            ? { ...reconciled, settings: liveSettings, updatedAt: timestamp }
+            : workspace),
+        };
+      }
     }
   }
 
   localStorage.setItem(ADVANCED_STATE_KEY, JSON.stringify(state));
+
+  if (migrated) {
+    applyWorkspaceToLocal(state.workspaces.find((workspace) => workspace.id === activeWorkspaceId));
+    try { sessionStorage.setItem(WORKSPACE_MIGRATION_KEY, '1'); } catch {}
+  }
+
   return state;
 };
 
 export const saveAdvancedState = (nextState, { writeLegacy = true, preserveUpdatedAt = false } = {}) => {
+  const workspaces = (Array.isArray(nextState?.workspaces) ? nextState.workspaces : [])
+    .map((workspace) => normalizeWorkspace(workspace));
+  const requestedActiveId = String(nextState?.activeWorkspaceId || '');
+  const activeWorkspaceId = workspaces.some((workspace) => workspace.id === requestedActiveId)
+    ? requestedActiveId
+    : workspaces[0]?.id;
   const state = {
     ...nextState,
-    schemaVersion: 3,
+    schemaVersion: SCHEMA_VERSION,
+    activeWorkspaceId,
+    workspaces,
+    tombstones: normalizeTombstones(nextState?.tombstones),
     updatedAt: preserveUpdatedAt && nextState.updatedAt ? nextState.updatedAt : nowIso(),
   };
   localStorage.setItem(ADVANCED_STATE_KEY, JSON.stringify(state));
@@ -276,23 +378,54 @@ export const saveAdvancedState = (nextState, { writeLegacy = true, preserveUpdat
   return state;
 };
 
+export const finalizeWorkspaceMigration = () => {
+  try {
+    if (sessionStorage.getItem(WORKSPACE_MIGRATION_KEY) !== '1') return false;
+    const state = loadAdvancedState({ captureLegacy: false });
+    applyWorkspaceToLocal(getActiveWorkspace(state));
+    sessionStorage.removeItem(WORKSPACE_MIGRATION_KEY);
+    return true;
+  } catch {
+    return false;
+  }
+};
+
 export const getActiveWorkspace = (state) =>
   state.workspaces.find((workspace) => workspace.id === state.activeWorkspaceId) || state.workspaces[0];
 
 export const captureActiveWorkspace = (state) => {
-  const apps = readLegacyApps();
   const settings = readWorkspaceSettings();
   const active = getActiveWorkspace(state);
-  if (!active || (sameValue(active.apps, apps) && sameValue(active.settings, settings))) return state;
+  if (!active) return state;
+  const liveApps = readLegacyApps();
+  const liveIds = new Set(liveApps.map((app) => normalizeAppId(app.id)));
   const timestamp = nowIso();
+  const tombstones = normalizeTombstones(state.tombstones);
+  let tombstonesChanged = false;
+
+  (active.apps || []).filter((app) => !app?.folderId).forEach((app) => {
+    const id = normalizeAppId(app.id);
+    if (!liveIds.has(id)) {
+      const key = entityKey(active.id, id);
+      if (!tombstones.apps[key]) {
+        tombstones.apps[key] = timestamp;
+        tombstonesChanged = true;
+      }
+    }
+  });
+
+  const reservedIds = Object.keys(tombstones.apps)
+    .filter((key) => key.startsWith(`${active.id}:`))
+    .map((key) => key.slice(active.id.length + 1));
+  const reconciled = reconcileLiveRootApps(active, liveApps, reservedIds);
+  if (!tombstonesChanged && sameValue(reconciled.apps, active.apps) && sameValue(active.settings, settings)) return state;
   return {
     ...state,
+    tombstones,
     updatedAt: timestamp,
-    workspaces: state.workspaces.map((workspace) =>
-      workspace.id === state.activeWorkspaceId
-        ? { ...workspace, apps, settings, updatedAt: timestamp }
-        : workspace
-    ),
+    workspaces: state.workspaces.map((workspace) => workspace.id === state.activeWorkspaceId
+      ? { ...reconciled, settings, updatedAt: timestamp }
+      : workspace),
   };
 };
 
@@ -306,7 +439,39 @@ export const switchWorkspace = (state, workspaceId) => {
 
 export const addWorkspace = (state, name) => {
   const captured = captureActiveWorkspace(state);
-  const workspace = createWorkspace(name, readLegacyApps(), readWorkspaceSettings());
+  const workspace = createWorkspace(name, [], readWorkspaceSettings());
+  applyWorkspaceToLocal(workspace);
+  return saveAdvancedState({
+    ...captured,
+    activeWorkspaceId: workspace.id,
+    workspaces: [...captured.workspaces, workspace],
+  }, { writeLegacy: false });
+};
+
+export const duplicateWorkspace = (state, workspaceId, name) => {
+  const captured = captureActiveWorkspace(state);
+  const source = captured.workspaces.find((workspace) => workspace.id === workspaceId);
+  if (!source) return captured;
+  const folderIdMap = new Map();
+  const folders = source.folders.map((folder) => {
+    const id = makeId('folder');
+    folderIdMap.set(folder.id, id);
+    return { ...folder, id };
+  });
+  const timestamp = nowIso();
+  const workspace = {
+    ...source,
+    id: makeId('workspace'),
+    name: String(name || `${source.name} 副本`).trim() || `${source.name} 副本`,
+    apps: source.apps.map((app) => ({
+      ...app,
+      folderId: app.folderId ? (folderIdMap.get(String(app.folderId)) || null) : null,
+    })),
+    folders,
+    settings: normalizeWorkspaceSettings(source.settings),
+    createdAt: timestamp,
+    updatedAt: timestamp,
+  };
   applyWorkspaceToLocal(workspace);
   return saveAdvancedState({
     ...captured,
@@ -325,13 +490,16 @@ export const renameWorkspace = (state, workspaceId, name) => saveAdvancedState({
 export const deleteWorkspace = (state, workspaceId) => {
   if (state.workspaces.length <= 1) return state;
   const captured = captureActiveWorkspace(state);
+  const timestamp = nowIso();
   const workspaces = captured.workspaces.filter((workspace) => workspace.id !== workspaceId);
   const activeWorkspaceId = captured.activeWorkspaceId === workspaceId
     ? workspaces[0].id
     : captured.activeWorkspaceId;
   const active = workspaces.find((workspace) => workspace.id === activeWorkspaceId);
+  const tombstones = normalizeTombstones(captured.tombstones);
+  tombstones.workspaces[String(workspaceId)] = timestamp;
   applyWorkspaceToLocal(active);
-  return saveAdvancedState({ ...captured, workspaces, activeWorkspaceId }, { writeLegacy: false });
+  return saveAdvancedState({ ...captured, tombstones, workspaces, activeWorkspaceId }, { writeLegacy: false });
 };
 
 export const addFolder = (state, name) => saveAdvancedState({
@@ -339,7 +507,7 @@ export const addFolder = (state, name) => saveAdvancedState({
   workspaces: state.workspaces.map((workspace) => workspace.id === state.activeWorkspaceId
     ? {
         ...workspace,
-        folders: [...workspace.folders, normalizeFolder({ name, appIds: [] })],
+        folders: [...workspace.folders, normalizeFolder({ name })],
         updatedAt: nowIso(),
       }
     : workspace),
@@ -358,31 +526,41 @@ export const renameFolder = (state, folderId, name) => saveAdvancedState({
     : workspace),
 });
 
-export const deleteFolder = (state, folderId) => saveAdvancedState({
-  ...state,
-  workspaces: state.workspaces.map((workspace) => workspace.id === state.activeWorkspaceId
-    ? {
-        ...workspace,
-        folders: workspace.folders.filter((folder) => folder.id !== folderId),
-        updatedAt: nowIso(),
-      }
-    : workspace),
-});
+export const deleteFolder = (state, folderId) => {
+  const timestamp = nowIso();
+  const tombstones = normalizeTombstones(state.tombstones);
+  tombstones.folders[entityKey(state.activeWorkspaceId, folderId)] = timestamp;
+  return saveAdvancedState({
+    ...state,
+    tombstones,
+    workspaces: state.workspaces.map((workspace) => workspace.id === state.activeWorkspaceId
+      ? {
+          ...workspace,
+          apps: workspace.apps.map((app) => String(app.folderId || '') === String(folderId)
+            ? { ...app, folderId: null }
+            : app),
+          folders: workspace.folders.filter((folder) => folder.id !== folderId),
+          updatedAt: timestamp,
+        }
+      : workspace),
+  });
+};
 
-export const toggleAppInFolder = (state, folderId, appId) => saveAdvancedState({
+export const moveAppToFolder = (state, appId, folderId = null) => saveAdvancedState({
   ...state,
-  workspaces: state.workspaces.map((workspace) => workspace.id === state.activeWorkspaceId
-    ? {
-        ...workspace,
-        folders: workspace.folders.map((folder) => {
-          if (folder.id !== folderId) return folder;
-          const id = String(appId);
-          const contains = folder.appIds.includes(id);
-          return { ...folder, appIds: contains ? folder.appIds.filter((item) => item !== id) : [...folder.appIds, id] };
-        }),
-        updatedAt: nowIso(),
-      }
-    : workspace),
+  workspaces: state.workspaces.map((workspace) => {
+    if (workspace.id !== state.activeWorkspaceId) return workspace;
+    const normalizedFolderId = folderId && workspace.folders.some((folder) => folder.id === String(folderId))
+      ? String(folderId)
+      : null;
+    return {
+      ...workspace,
+      apps: workspace.apps.map((app) => normalizeAppId(app.id) === normalizeAppId(appId)
+        ? { ...app, folderId: normalizedFolderId }
+        : app),
+      updatedAt: nowIso(),
+    };
+  }),
 });
 
 export const captureFullSnapshot = ({ compact = false } = {}) => {
