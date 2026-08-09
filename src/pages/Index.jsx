@@ -156,7 +156,7 @@ const Index = () => {
           } catch {}
           return DEFAULT_APPS;
         }
-        if (Array.isArray(parsed) && parsed.length) return parsed;
+        if (Array.isArray(parsed)) return parsed;
       }
     } catch {}
     return DEFAULT_APPS;
@@ -1521,7 +1521,7 @@ const Index = () => {
                     </Button>
                   </div>
                   {bgUrlError && (
-                    <span className="text-xs text-red-500">{bgUrlError}</span>
+                    <span className="text-xs text-red-500 dark:text-red-400">{bgUrlError}</span>
                   )}
                   {!backgroundImage && (
                     <span className="text-xs text-gray-500 dark:text-gray-400">未设置背景时，将显示在线随机背景。设置直链可覆盖随机背景。</span>
