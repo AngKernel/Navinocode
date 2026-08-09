@@ -29,20 +29,20 @@ export const mergeEntityArrays = (base, incoming, prefix = 'item') => {
   return result;
 };
 
-const mergeFolders = (base, incoming) => {
-  const folders = mergeEntityArrays(base, incoming, 'folder');
-  return folders.map((folder) => {
-    const baseFolder = safeArray(base).find((item) => String(item?.id) === String(folder.id));
-    const incomingFolder = safeArray(incoming).find((item) => String(item?.id) === String(folder.id));
-    return {
-      ...folder,
-      appIds: [...new Set([
-        ...safeArray(baseFolder?.appIds).map(String),
-        ...safeArray(incomingFolder?.appIds).map(String),
-      ])],
-    };
+const mergeTombstoneGroup = (base, incoming) => {
+  const result = { ...safeObject(base) };
+  Object.entries(safeObject(incoming)).forEach(([key, value]) => {
+    const current = result[key];
+    if (!current || String(value || '') > String(current || '')) result[key] = value;
   });
+  return result;
 };
+
+const mergeTombstones = (base, incoming) => ({
+  workspaces: mergeTombstoneGroup(base?.workspaces, incoming?.workspaces),
+  folders: mergeTombstoneGroup(base?.folders, incoming?.folders),
+  apps: mergeTombstoneGroup(base?.apps, incoming?.apps),
+});
 
 const mergeWorkspaceSettings = (base, incoming) => {
   const left = safeObject(base);
@@ -58,28 +58,42 @@ const mergeWorkspaceSettings = (base, incoming) => {
   };
 };
 
-const mergeWorkspaces = (base, incoming) => {
+const entityKey = (workspaceId, entityId) => `${String(workspaceId)}:${String(entityId)}`;
+
+const mergeWorkspaces = (base, incoming, tombstones) => {
   const workspaces = mergeEntityArrays(base, incoming, 'workspace');
-  return workspaces.map((workspace) => {
-    const baseWorkspace = safeArray(base).find((item) => String(item?.id) === String(workspace.id));
-    const incomingWorkspace = safeArray(incoming).find((item) => String(item?.id) === String(workspace.id));
-    return {
-      ...baseWorkspace,
-      ...incomingWorkspace,
-      ...workspace,
-      apps: mergeEntityArrays(baseWorkspace?.apps, incomingWorkspace?.apps, 'app'),
-      folders: mergeFolders(baseWorkspace?.folders, incomingWorkspace?.folders),
-      settings: mergeWorkspaceSettings(baseWorkspace?.settings, incomingWorkspace?.settings),
-      updatedAt: incomingWorkspace?.updatedAt || baseWorkspace?.updatedAt || workspace.updatedAt,
-    };
-  });
+  return workspaces
+    .filter((workspace) => !tombstones.workspaces[String(workspace.id)])
+    .map((workspace) => {
+      const baseWorkspace = safeArray(base).find((item) => String(item?.id) === String(workspace.id));
+      const incomingWorkspace = safeArray(incoming).find((item) => String(item?.id) === String(workspace.id));
+      const apps = mergeEntityArrays(baseWorkspace?.apps, incomingWorkspace?.apps, 'app')
+        .filter((app) => !tombstones.apps[entityKey(workspace.id, app.id)]);
+      const folders = mergeEntityArrays(baseWorkspace?.folders, incomingWorkspace?.folders, 'folder')
+        .filter((folder) => !tombstones.folders[entityKey(workspace.id, folder.id)]);
+      const validFolderIds = new Set(folders.map((folder) => String(folder.id)));
+
+      return {
+        ...baseWorkspace,
+        ...incomingWorkspace,
+        ...workspace,
+        apps: apps.map((app) => ({
+          ...app,
+          folderId: app?.folderId && validFolderIds.has(String(app.folderId)) ? String(app.folderId) : null,
+        })),
+        folders: folders.map(({ appIds, ...folder }) => folder),
+        settings: mergeWorkspaceSettings(baseWorkspace?.settings, incomingWorkspace?.settings),
+        updatedAt: incomingWorkspace?.updatedAt || baseWorkspace?.updatedAt || workspace.updatedAt,
+      };
+    });
 };
 
 const mergeAdvancedState = (base, incoming) => {
   if (!base && !incoming) return undefined;
   const baseState = safeObject(base);
   const incomingState = safeObject(incoming);
-  const workspaces = mergeWorkspaces(baseState.workspaces, incomingState.workspaces);
+  const tombstones = mergeTombstones(baseState.tombstones, incomingState.tombstones);
+  const workspaces = mergeWorkspaces(baseState.workspaces, incomingState.workspaces, tombstones);
   const requestedActiveId = incomingState.activeWorkspaceId || baseState.activeWorkspaceId;
   const activeWorkspaceId = workspaces.some((workspace) => workspace.id === requestedActiveId)
     ? requestedActiveId
@@ -87,9 +101,10 @@ const mergeAdvancedState = (base, incoming) => {
   return {
     ...baseState,
     ...incomingState,
-    schemaVersion: Math.max(Number(baseState.schemaVersion || 0), Number(incomingState.schemaVersion || 0), 3),
+    schemaVersion: Math.max(Number(baseState.schemaVersion || 0), Number(incomingState.schemaVersion || 0), 4),
     activeWorkspaceId,
     workspaces,
+    tombstones,
     updatedAt: incomingState.updatedAt || baseState.updatedAt,
   };
 };
@@ -110,7 +125,7 @@ export const mergeSnapshots = (base, incoming) => {
   if (advancedState?.activeWorkspaceId) {
     const active = advancedState.workspaces.find((workspace) => workspace.id === advancedState.activeWorkspaceId);
     if (active) {
-      merged.apps = mergeEntityArrays(merged.apps, active.apps, 'app');
+      merged.apps = safeArray(active.apps).filter((app) => !app?.folderId);
       const settings = safeObject(active.settings);
       if (Array.isArray(settings.todos)) merged.todos = settings.todos;
       if (settings.componentSettings) merged.componentSettings = safeObject(settings.componentSettings);
