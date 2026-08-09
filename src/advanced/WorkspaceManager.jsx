@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import { Folder, FolderPlus, LayoutGrid, Pencil, Plus, Trash2 } from 'lucide-react';
+import { Copy, Folder, FolderPlus, LayoutGrid, Pencil, Plus, Trash2 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Dialog, DialogContent, DialogTitle } from '@/components/ui/dialog';
 import { Input } from '@/components/ui/input';
@@ -10,12 +10,13 @@ import {
   addWorkspace,
   deleteFolder,
   deleteWorkspace,
+  duplicateWorkspace,
   getActiveWorkspace,
   loadAdvancedState,
+  moveAppToFolder,
   renameFolder,
   renameWorkspace,
   switchWorkspace,
-  toggleAppInFolder,
 } from './storage';
 
 const WorkspaceManager = ({ open, onOpenChange, footer = null }) => {
@@ -24,13 +25,28 @@ const WorkspaceManager = ({ open, onOpenChange, footer = null }) => {
   const [newFolderName, setNewFolderName] = useState('');
   const [workspaceName, setWorkspaceName] = useState('');
   const [folderNames, setFolderNames] = useState({});
+  const [reloadOnClose, setReloadOnClose] = useState(false);
 
   const activeWorkspace = useMemo(() => getActiveWorkspace(state), [state]);
+  const rootApps = useMemo(
+    () => (activeWorkspace?.apps || []).filter((app) => !app?.folderId),
+    [activeWorkspace],
+  );
+  const folderCounts = useMemo(() => {
+    const counts = new Map((activeWorkspace?.folders || []).map((folder) => [folder.id, 0]));
+    (activeWorkspace?.apps || []).forEach((app) => {
+      if (app?.folderId && counts.has(String(app.folderId))) {
+        counts.set(String(app.folderId), (counts.get(String(app.folderId)) || 0) + 1);
+      }
+    });
+    return counts;
+  }, [activeWorkspace]);
 
   useEffect(() => {
     if (!open) return;
     const next = loadAdvancedState();
     setState(next);
+    setReloadOnClose(false);
   }, [open]);
 
   useEffect(() => {
@@ -49,6 +65,13 @@ const WorkspaceManager = ({ open, onOpenChange, footer = null }) => {
     return next;
   };
 
+  const handleOpenChange = (nextOpen) => {
+    onOpenChange(nextOpen);
+    if (!nextOpen && reloadOnClose) {
+      setTimeout(() => window.location.reload(), 120);
+    }
+  };
+
   const changeWorkspace = (workspaceId) => {
     if (workspaceId === state.activeWorkspaceId) return;
     commit(switchWorkspace(state, workspaceId));
@@ -61,7 +84,14 @@ const WorkspaceManager = ({ open, onOpenChange, footer = null }) => {
     if (!name) return;
     commit(addWorkspace(state, name));
     setNewWorkspaceName('');
-    toast('工作空间已创建');
+    toast('空白工作空间已创建');
+    setTimeout(() => window.location.reload(), 180);
+  };
+
+  const copyWorkspace = () => {
+    if (!activeWorkspace) return;
+    commit(duplicateWorkspace(state, activeWorkspace.id));
+    toast('工作空间副本已创建');
     setTimeout(() => window.location.reload(), 180);
   };
 
@@ -89,18 +119,19 @@ const WorkspaceManager = ({ open, onOpenChange, footer = null }) => {
     commit(renameFolder(state, folderId, folderNames[folderId]));
   };
 
-  const openApp = (url) => {
-    try {
-      const target = new URL(url);
-      if (!['http:', 'https:'].includes(target.protocol)) throw new Error('unsupported');
-      window.open(target.href, '_blank', 'noopener,noreferrer');
-    } catch {
-      toast('应用网址无效');
-    }
+  const removeFolder = (folderId) => {
+    commit(deleteFolder(state, folderId));
+    setReloadOnClose(true);
+    toast('文件夹已删除，里面的应用已移回根目录');
+  };
+
+  const moveApp = (appId, folderId) => {
+    commit(moveAppToFolder(state, appId, folderId || null));
+    setReloadOnClose(true);
   };
 
   return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
+    <Dialog open={open} onOpenChange={handleOpenChange}>
       <DialogContent className="h-[86vh] max-h-[760px] max-w-4xl gap-0 overflow-hidden rounded-3xl p-0">
         <DialogTitle className="sr-only">工作空间和文件夹</DialogTitle>
         <div className="grid h-full min-h-0 grid-cols-1 grid-rows-[auto_minmax(0,1fr)] md:grid-cols-[220px_minmax(0,1fr)] md:grid-rows-1">
@@ -145,7 +176,7 @@ const WorkspaceManager = ({ open, onOpenChange, footer = null }) => {
                 className="h-9 rounded-xl"
               />
               <Button type="button" variant="secondary" className="w-full rounded-xl" onClick={createWorkspace}>
-                <Plus className="mr-2 h-4 w-4" />创建
+                <Plus className="mr-2 h-4 w-4" />创建空白空间
               </Button>
             </div>
           </aside>
@@ -162,15 +193,28 @@ const WorkspaceManager = ({ open, onOpenChange, footer = null }) => {
                   className="mt-2 rounded-xl"
                 />
               </div>
-              <Button type="button" variant="outline" className="rounded-xl" onClick={saveWorkspaceName}>
-                <Pencil className="mr-2 h-4 w-4" />保存名称
-              </Button>
+              <div className="flex gap-2">
+                <Button type="button" variant="outline" className="rounded-xl" onClick={copyWorkspace}>
+                  <Copy className="mr-2 h-4 w-4" />复制
+                </Button>
+                <Button type="button" variant="outline" className="rounded-xl" onClick={saveWorkspaceName}>
+                  <Pencil className="mr-2 h-4 w-4" />保存名称
+                </Button>
+              </div>
             </div>
 
-            <section className="py-5">
-              <div className="mb-3 flex items-center gap-2 font-semibold">
-                <Folder className="h-4 w-4" />应用文件夹
+            <section className="border-b py-5">
+              <div className="mb-2 flex items-center justify-between gap-3">
+                <div className="flex items-center gap-2 font-semibold">
+                  <Folder className="h-4 w-4" />文件夹
+                </div>
+                <span className="text-xs text-gray-500">
+                  根目录 {rootApps.length} 个 · 文件夹 {(activeWorkspace?.folders || []).length} 个
+                </span>
               </div>
+              <p className="mb-4 text-xs leading-relaxed text-gray-500">
+                每个应用只属于一个位置：工作空间根目录，或某一个文件夹。删除文件夹不会删除应用。
+              </p>
               <div className="mb-4 flex gap-2">
                 <Input
                   value={newFolderName}
@@ -185,60 +229,65 @@ const WorkspaceManager = ({ open, onOpenChange, footer = null }) => {
               </div>
 
               {(activeWorkspace?.folders || []).length === 0 ? (
-                <div className="rounded-2xl border border-dashed px-4 py-10 text-center text-sm text-gray-500">
-                  暂无文件夹。创建后可将当前工作空间的应用加入其中。
+                <div className="rounded-2xl border border-dashed px-4 py-8 text-center text-sm text-gray-500">
+                  暂无文件夹。新建后可在下方把应用移动进去。
                 </div>
               ) : (
-                <div className="space-y-4">
+                <div className="grid gap-2 sm:grid-cols-2">
                   {activeWorkspace.folders.map((folder) => (
-                    <div key={folder.id} className="rounded-2xl border p-4">
-                      <div className="mb-3 flex items-center gap-2">
-                        <Input
-                          value={folderNames[folder.id] ?? folder.name}
-                          onChange={(event) => setFolderNames((names) => ({ ...names, [folder.id]: event.target.value }))}
-                          onBlur={() => saveFolderName(folder.id)}
-                          className="h-9 rounded-xl font-medium"
-                        />
-                        <Button
-                          type="button"
-                          variant="ghost"
-                          size="icon"
-                          className="h-9 w-9 shrink-0"
-                          onClick={() => commit(deleteFolder(state, folder.id))}
-                          aria-label={`删除文件夹 ${folder.name}`}
-                        >
-                          <Trash2 className="h-4 w-4" />
-                        </Button>
+                    <div key={folder.id} className="flex items-center gap-2 rounded-2xl border p-3">
+                      <Input
+                        value={folderNames[folder.id] ?? folder.name}
+                        onChange={(event) => setFolderNames((names) => ({ ...names, [folder.id]: event.target.value }))}
+                        onBlur={() => saveFolderName(folder.id)}
+                        className="h-9 min-w-0 rounded-xl font-medium"
+                      />
+                      <span className="shrink-0 text-xs text-gray-500">{folderCounts.get(folder.id) || 0} 个</span>
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        size="icon"
+                        className="h-9 w-9 shrink-0"
+                        onClick={() => removeFolder(folder.id)}
+                        aria-label={`删除文件夹 ${folder.name}`}
+                        title="删除文件夹，应用移回根目录"
+                      >
+                        <Trash2 className="h-4 w-4" />
+                      </Button>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </section>
+
+            <section className="py-5">
+              <div className="mb-2 font-semibold">应用位置</div>
+              <p className="mb-4 text-xs leading-relaxed text-gray-500">
+                移入文件夹后，应用会从底部根目录 Dock 中移除，并显示在对应文件夹里。
+              </p>
+              {(activeWorkspace?.apps || []).length === 0 ? (
+                <div className="rounded-2xl border border-dashed px-4 py-10 text-center text-sm text-gray-500">
+                  这个工作空间还是空的。关闭面板后可通过底部九宫格添加应用。
+                </div>
+              ) : (
+                <div className="space-y-2">
+                  {activeWorkspace.apps.map((app) => (
+                    <div key={app.id} className="flex flex-col gap-2 rounded-2xl border px-3 py-3 sm:flex-row sm:items-center">
+                      <div className="min-w-0 flex-1">
+                        <div className="truncate text-sm font-medium">{app.name || app.url}</div>
+                        <div className="truncate text-xs text-gray-500">{app.url}</div>
                       </div>
-                      <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
-                        {(activeWorkspace.apps || []).map((app) => {
-                          const selected = folder.appIds.includes(String(app.id));
-                          return (
-                            <div
-                              key={app.id}
-                              className={`flex items-center gap-2 rounded-xl border px-3 py-2 ${selected ? 'bg-blue-50 dark:bg-blue-950/30' : ''}`}
-                            >
-                              <button
-                                type="button"
-                                className="min-w-0 flex-1 truncate text-left text-sm"
-                                onClick={() => openApp(app.url)}
-                                title={app.url}
-                              >
-                                {app.name || app.url}
-                              </button>
-                              <Button
-                                type="button"
-                                size="sm"
-                                variant={selected ? 'secondary' : 'outline'}
-                                className="h-7 rounded-lg px-2 text-xs"
-                                onClick={() => commit(toggleAppInFolder(state, folder.id, app.id))}
-                              >
-                                {selected ? '已加入' : '加入'}
-                              </Button>
-                            </div>
-                          );
-                        })}
-                      </div>
+                      <select
+                        value={app.folderId || ''}
+                        onChange={(event) => moveApp(app.id, event.target.value)}
+                        className="h-9 min-w-[180px] rounded-xl border border-input bg-background px-3 text-sm outline-none focus:ring-2 focus:ring-ring"
+                        aria-label={`设置 ${app.name || app.url} 的位置`}
+                      >
+                        <option value="">工作空间根目录</option>
+                        {(activeWorkspace?.folders || []).map((folder) => (
+                          <option key={folder.id} value={folder.id}>{folder.name}</option>
+                        ))}
+                      </select>
                     </div>
                   ))}
                 </div>

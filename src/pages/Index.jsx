@@ -19,6 +19,7 @@ import { useGitHubStars } from '@/components/useGitHubStars';
 import { toast } from 'sonner';
 import { getStoredSupabaseConfig, getSupabaseClientId, getStoredSyncId, persistSupabaseConfig, persistSyncId } from '@/integrations/supabase/client';
 import { pullCloudState, pushCloudState } from '@/lib/cloudSync';
+import { applyFullSnapshot, captureFullSnapshot } from '@/advanced/storage';
 
 const logoUrl = (domain) => `https://www.google.com/s2/favicons?domain=${domain}&sz=128`;
 const localSvg = (name) => `/svgs/${name}.svg`;
@@ -156,7 +157,7 @@ const Index = () => {
           } catch {}
           return DEFAULT_APPS;
         }
-        if (Array.isArray(parsed) && parsed.length) return parsed;
+        if (Array.isArray(parsed)) return parsed;
       }
     } catch {}
     return DEFAULT_APPS;
@@ -828,21 +829,7 @@ const Index = () => {
     }
   };
 
-  const createConfigPayload = () => ({
-    apps,
-    todos,
-    componentSettings,
-    searchEngine,
-    onlineSuggestionsEnabled,
-    backgroundImage,
-    backgroundBrightness,
-    backgroundBlur,
-    backgroundOverlay,
-    themeMode,
-    bottomCount: localStorage.getItem('bottomCount'),
-    widgetPositions: localStorage.getItem('widget_positions'),
-    widgetPins: localStorage.getItem('widget_pins'),
-  });
+  const createConfigPayload = () => captureFullSnapshot();
 
   const handleExportConfig = () => {
     const content = JSON.stringify({
@@ -868,6 +855,7 @@ const Index = () => {
       if (!payload || !Array.isArray(payload.apps) || !Array.isArray(payload.todos)) {
         throw new Error('配置文件缺少 apps 或 todos');
       }
+      if (payload.advancedState) applyFullSnapshot(payload);
       applyCloudPayload(payload);
       if (payload.bottomCount != null) localStorage.setItem('bottomCount', String(payload.bottomCount));
       if (typeof payload.widgetPositions === 'string') localStorage.setItem('widget_positions', payload.widgetPositions);
