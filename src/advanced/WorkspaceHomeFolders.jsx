@@ -22,8 +22,14 @@ const WorkspaceHomeFolders = () => {
   const folders = activeWorkspace?.folders || [];
   const selectedFolder = folders.find((folder) => folder.id === selectedFolderId) || null;
   const folderApps = selectedFolder
-    ? (activeWorkspace?.apps || []).filter((app) => selectedFolder.appIds.includes(String(app.id)))
+    ? (activeWorkspace?.apps || []).filter((app) => String(app?.folderId || '') === String(selectedFolder.id))
     : [];
+
+  useEffect(() => {
+    if (selectedFolderId && !folders.some((folder) => folder.id === selectedFolderId)) {
+      setSelectedFolderId('');
+    }
+  }, [folders, selectedFolderId]);
 
   if (folders.length === 0) return null;
 
@@ -39,8 +45,8 @@ const WorkspaceHomeFolders = () => {
     <>
       <div className="fixed left-6 top-20 z-10 flex max-w-[calc(100vw-3rem)] gap-2 overflow-x-auto pb-1">
         {folders.map((folder) => {
-          const appCount = folder.appIds.filter((appId) =>
-            (activeWorkspace?.apps || []).some((app) => String(app.id) === String(appId))
+          const appCount = (activeWorkspace?.apps || []).filter(
+            (app) => String(app?.folderId || '') === String(folder.id),
           ).length;
 
           return (
@@ -74,7 +80,7 @@ const WorkspaceHomeFolders = () => {
 
           {folderApps.length === 0 ? (
             <div className="rounded-2xl border border-dashed px-4 py-10 text-center text-sm text-gray-500">
-              这个文件夹还没有网站，可在工作空间管理中添加。
+              这个文件夹还没有网站，可在工作空间管理中把应用移动进来。
             </div>
           ) : (
             <div className="grid grid-cols-3 gap-3 sm:grid-cols-4">
