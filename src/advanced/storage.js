@@ -34,6 +34,8 @@ const nowIso = () => new Date().toISOString();
 const makeId = (prefix) => `${prefix}-${crypto.randomUUID?.() || `${Date.now()}-${Math.random().toString(16).slice(2)}`}`;
 const sameValue = (left, right) => JSON.stringify(left ?? null) === JSON.stringify(right ?? null);
 const clampNumber = (value, fallback, min = -Infinity, max = Infinity) => {
+  // Missing values are not zero; preserve an explicitly stored 0.
+  if (value === null || value === undefined || (typeof value === 'string' && !value.trim())) return fallback;
   const parsed = Number(value);
   return Number.isFinite(parsed) ? Math.min(max, Math.max(min, parsed)) : fallback;
 };
@@ -315,12 +317,15 @@ export const addWorkspace = (state, name) => {
   }, { writeLegacy: false });
 };
 
-export const renameWorkspace = (state, workspaceId, name) => saveAdvancedState({
-  ...state,
-  workspaces: state.workspaces.map((workspace) => workspace.id === workspaceId
-    ? { ...workspace, name: String(name || '').trim() || workspace.name, updatedAt: nowIso() }
-    : workspace),
-});
+export const renameWorkspace = (state, workspaceId, name) => {
+  const captured = captureActiveWorkspace(state);
+  return saveAdvancedState({
+    ...captured,
+    workspaces: captured.workspaces.map((workspace) => workspace.id === workspaceId
+      ? { ...workspace, name: String(name || '').trim() || workspace.name, updatedAt: nowIso() }
+      : workspace),
+  }, { writeLegacy: false });
+};
 
 export const deleteWorkspace = (state, workspaceId) => {
   if (state.workspaces.length <= 1) return state;
@@ -334,56 +339,42 @@ export const deleteWorkspace = (state, workspaceId) => {
   return saveAdvancedState({ ...captured, workspaces, activeWorkspaceId }, { writeLegacy: false });
 };
 
-export const addFolder = (state, name) => saveAdvancedState({
-  ...state,
-  workspaces: state.workspaces.map((workspace) => workspace.id === state.activeWorkspaceId
-    ? {
-        ...workspace,
-        folders: [...workspace.folders, normalizeFolder({ name, appIds: [] })],
-        updatedAt: nowIso(),
-      }
-    : workspace),
-});
+const updateActiveWorkspaceMetadata = (state, update) => {
+  const captured = captureActiveWorkspace(state);
+  return saveAdvancedState({
+    ...captured,
+    workspaces: captured.workspaces.map((workspace) => workspace.id === captured.activeWorkspaceId
+      ? { ...update(workspace), updatedAt: nowIso() }
+      : workspace),
+  }, { writeLegacy: false });
+};
 
-export const renameFolder = (state, folderId, name) => saveAdvancedState({
-  ...state,
-  workspaces: state.workspaces.map((workspace) => workspace.id === state.activeWorkspaceId
-    ? {
-        ...workspace,
-        folders: workspace.folders.map((folder) => folder.id === folderId
-          ? { ...folder, name: String(name || '').trim() || folder.name }
-          : folder),
-        updatedAt: nowIso(),
-      }
-    : workspace),
-});
+export const addFolder = (state, name) => updateActiveWorkspaceMetadata(state, (workspace) => ({
+  ...workspace,
+  folders: [...workspace.folders, normalizeFolder({ name, appIds: [] })],
+}));
 
-export const deleteFolder = (state, folderId) => saveAdvancedState({
-  ...state,
-  workspaces: state.workspaces.map((workspace) => workspace.id === state.activeWorkspaceId
-    ? {
-        ...workspace,
-        folders: workspace.folders.filter((folder) => folder.id !== folderId),
-        updatedAt: nowIso(),
-      }
-    : workspace),
-});
+export const renameFolder = (state, folderId, name) => updateActiveWorkspaceMetadata(state, (workspace) => ({
+  ...workspace,
+  folders: workspace.folders.map((folder) => folder.id === folderId
+    ? { ...folder, name: String(name || '').trim() || folder.name }
+    : folder),
+}));
 
-export const toggleAppInFolder = (state, folderId, appId) => saveAdvancedState({
-  ...state,
-  workspaces: state.workspaces.map((workspace) => workspace.id === state.activeWorkspaceId
-    ? {
-        ...workspace,
-        folders: workspace.folders.map((folder) => {
-          if (folder.id !== folderId) return folder;
-          const id = String(appId);
-          const contains = folder.appIds.includes(id);
-          return { ...folder, appIds: contains ? folder.appIds.filter((item) => item !== id) : [...folder.appIds, id] };
-        }),
-        updatedAt: nowIso(),
-      }
-    : workspace),
-});
+export const deleteFolder = (state, folderId) => updateActiveWorkspaceMetadata(state, (workspace) => ({
+  ...workspace,
+  folders: workspace.folders.filter((folder) => folder.id !== folderId),
+}));
+
+export const toggleAppInFolder = (state, folderId, appId) => updateActiveWorkspaceMetadata(state, (workspace) => ({
+  ...workspace,
+  folders: workspace.folders.map((folder) => {
+    if (folder.id !== folderId) return folder;
+    const id = String(appId);
+    const contains = folder.appIds.includes(id);
+    return { ...folder, appIds: contains ? folder.appIds.filter((item) => item !== id) : [...folder.appIds, id] };
+  }),
+}));
 
 export const captureFullSnapshot = ({ compact = false } = {}) => {
   const loadedState = loadAdvancedState();
@@ -430,11 +421,74 @@ export const captureFullSnapshot = ({ compact = false } = {}) => {
   };
 };
 
+const isRecord = (value) => Boolean(value && typeof value === 'object' && !Array.isArray(value));
+
+export const validateFullSnapshot = (snapshot) => {
+  const invalid = () => { throw new Error('同步配置格式无效，未覆盖本地数据'); };
+  if (!isRecord(snapshot)) invalid();
+  const validateSettings = (settings) => {
+    if (!isRecord(settings)) invalid();
+    if (settings.todos !== undefined && (!Array.isArray(settings.todos) || settings.todos.some((todo) => !isRecord(todo) || typeof todo.text !== 'string'))) invalid();
+    if (settings.componentSettings !== undefined && !isRecord(settings.componentSettings)) invalid();
+  };
+  const validateApps = (apps) => {
+    if (!Array.isArray(apps) || apps.some((app) => !isRecord(app) || typeof app.url !== 'string')) invalid();
+  };
+  validateSettings(snapshot);
+  if (snapshot.apps !== undefined) validateApps(snapshot.apps);
+  if (snapshot.advancedState !== undefined) {
+    const advanced = snapshot.advancedState;
+    if (!isRecord(advanced) || !Array.isArray(advanced.workspaces) || !advanced.workspaces.length) invalid();
+    if (Number(advanced.schemaVersion) > 3) throw new Error('同步配置版本较新，请先升级 Navinocode');
+    const ids = new Set();
+    advanced.workspaces.forEach((workspace) => {
+      if (!isRecord(workspace) || typeof workspace.id !== 'string' || !workspace.id || ids.has(workspace.id)) invalid();
+      ids.add(workspace.id);
+      if (workspace.apps !== undefined) validateApps(workspace.apps);
+      if (workspace.settings !== undefined) validateSettings(workspace.settings);
+      if (workspace.folders !== undefined && (!Array.isArray(workspace.folders) || workspace.folders.some((folder) => !isRecord(folder) || (folder.appIds !== undefined && !Array.isArray(folder.appIds))))) invalid();
+    });
+    if (advanced.activeWorkspaceId !== undefined && !ids.has(advanced.activeWorkspaceId)) invalid();
+  }
+};
+
+// Compact browser snapshots intentionally omit device-local image assets.
+// Omission must not be interpreted as an explicit request to clear an asset.
+const restoreAppIcons = (apps, localApps) => apps.map((app) => {
+  if (Object.prototype.hasOwnProperty.call(app, 'icon')) return app;
+  const local = localApps.find((item) => item?.url === app.url && String(item.id) === String(app.id))
+    || localApps.find((item) => item?.url === app.url);
+  return local?.icon ? { ...app, icon: local.icon } : app;
+});
+
 export const applyFullSnapshot = (snapshot) => {
-  if (!snapshot || typeof snapshot !== 'object') return;
+  validateFullSnapshot(snapshot);
+  const localApps = readLegacyApps();
+  let advancedState;
+  if (snapshot.advancedState) {
+    const previous = loadAdvancedState();
+    const workspaces = snapshot.advancedState.workspaces.map((workspace) => {
+      const local = previous.workspaces.find((item) => item.id === workspace.id);
+      const normalized = normalizeWorkspace(workspace, local?.apps || [], local?.settings || WORKSPACE_SETTING_DEFAULTS);
+      // Unlike a full snapshot's empty string, an omitted background is local-only.
+      if (!Object.prototype.hasOwnProperty.call(workspace.settings || {}, 'backgroundImage')) {
+        normalized.settings.backgroundImage = local?.settings?.backgroundImage || '';
+      }
+      normalized.apps = restoreAppIcons(normalized.apps, local?.apps || []);
+      return { ...workspace, ...normalized };
+    });
+    advancedState = {
+      ...snapshot.advancedState,
+      activeWorkspaceId: snapshot.advancedState.activeWorkspaceId || workspaces[0].id,
+      workspaces,
+    };
+  }
   const jsonKeys = ['apps', 'todos', 'componentSettings'];
   jsonKeys.forEach((key) => {
-    if (snapshot[key] !== undefined) localStorage.setItem(key, JSON.stringify(snapshot[key]));
+    if (snapshot[key] !== undefined) {
+      const value = key === 'apps' ? restoreAppIcons(snapshot.apps, localApps) : snapshot[key];
+      localStorage.setItem(key, JSON.stringify(value));
+    }
   });
   const scalarKeys = [
     'searchEngine', 'onlineSuggestionsEnabled', 'backgroundImage', 'backgroundBrightness',
@@ -450,10 +504,13 @@ export const applyFullSnapshot = (snapshot) => {
         : key;
     localStorage.setItem(storageKey, String(value));
   });
-  if (snapshot.advancedState) saveAdvancedState(snapshot.advancedState, { preserveUpdatedAt: true });
+  if (advancedState) saveAdvancedState(advancedState, { preserveUpdatedAt: true });
   window.dispatchEvent(new CustomEvent('navinocode:snapshot-applied'));
 };
 
 export const isNativeSyncEnabled = () => localStorage.getItem(NATIVE_SYNC_ENABLED_KEY) === 'true';
-export const setNativeSyncEnabled = (enabled) => localStorage.setItem(NATIVE_SYNC_ENABLED_KEY, enabled ? 'true' : 'false');
+export const setNativeSyncEnabled = (enabled) => {
+  localStorage.setItem(NATIVE_SYNC_ENABLED_KEY, enabled ? 'true' : 'false');
+  window.dispatchEvent(new CustomEvent('navinocode:native-sync-setting'));
+};
 export const ADVANCED_KEYS = { ADVANCED_STATE_KEY, NATIVE_SYNC_ENABLED_KEY };
