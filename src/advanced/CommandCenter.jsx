@@ -4,6 +4,7 @@ import { Dialog, DialogContent, DialogTitle } from '@/components/ui/dialog';
 import { Input } from '@/components/ui/input';
 import { toast } from 'sonner';
 import { getActiveWorkspace, loadAdvancedState } from './storage';
+import { EMPTY_RESULTS, isComposingEvent, parseTimerMinutes } from './interactionUtils.js';
 import {
   getBrowserPermissionState,
   isExtensionRuntime,
@@ -41,8 +42,8 @@ const addTodo = (text) => {
 };
 
 const setPomodoro = (minutes) => {
-  const value = Number.parseInt(minutes, 10);
-  if (!Number.isFinite(value) || value < 1 || value > 180) return false;
+  const value = parseTimerMinutes(minutes);
+  if (value === null) return false;
   localStorage.setItem('pomodoro_minutes', String(value));
   let settings = {};
   try {
@@ -153,21 +154,29 @@ const resultIcon = (type) => {
   return <Search className="h-4 w-4" />;
 };
 
-const CommandCenter = ({ open, onOpenChange, extraResults = [], onQueryChange }) => {
+const CommandCenter = ({ open, onOpenChange, extraResults = EMPTY_RESULTS, onQueryChange }) => {
   const [query, setQuery] = useState('');
   const [activeIndex, setActiveIndex] = useState(0);
   const [browserResults, setBrowserResults] = useState([]);
   const [browserEnabled, setBrowserEnabled] = useState(false);
   const inputRef = useRef(null);
+  const resultsRef = useRef(null);
 
   useEffect(() => {
     if (!open) return;
     setQuery('');
     setActiveIndex(0);
-    requestAnimationFrame(() => inputRef.current?.focus());
+    let cancelled = false;
+    const frame = requestAnimationFrame(() => inputRef.current?.focus());
     getBrowserPermissionState().then((permissions) => {
-      setBrowserEnabled(Object.values(permissions).some(Boolean));
+      if (!cancelled) setBrowserEnabled(Object.values(permissions).some(Boolean));
+    }).catch(() => {
+      if (!cancelled) setBrowserEnabled(false);
     });
+    return () => {
+      cancelled = true;
+      cancelAnimationFrame(frame);
+    };
   }, [open]);
 
   useEffect(() => {
@@ -177,13 +186,18 @@ const CommandCenter = ({ open, onOpenChange, extraResults = [], onQueryChange })
   useEffect(() => {
     const normalized = query.trim();
     if (!open || !browserEnabled || normalized.length < 2) {
-      setBrowserResults([]);
+      setBrowserResults(EMPTY_RESULTS);
       return undefined;
     }
     let cancelled = false;
+    setBrowserResults(EMPTY_RESULTS);
     const timer = setTimeout(async () => {
-      const items = await searchBrowserData(normalized);
-      if (!cancelled) setBrowserResults(items);
+      try {
+        const items = await searchBrowserData(normalized);
+        if (!cancelled) setBrowserResults(items);
+      } catch {
+        if (!cancelled) setBrowserResults(EMPTY_RESULTS);
+      }
     }, 160);
     return () => {
       cancelled = true;
@@ -192,6 +206,7 @@ const CommandCenter = ({ open, onOpenChange, extraResults = [], onQueryChange })
   }, [query, open, browserEnabled]);
 
   const results = useMemo(() => {
+    if (!open) return EMPTY_RESULTS;
     const state = loadAdvancedState();
     const workspace = getActiveWorkspace(state);
     const normalized = query.trim().toLowerCase();
@@ -232,7 +247,7 @@ const CommandCenter = ({ open, onOpenChange, extraResults = [], onQueryChange })
       });
     } else if (direct?.type === 'timer') {
       items.unshift({
-        id: 'direct-timer', type: 'timer', title: `启动 ${direct.argument} 分钟番茄钟`,
+        id: 'direct-timer', type: 'timer', title: `设置 ${direct.argument} 分钟番茄钟`,
         subtitle: 'timer + 1～180 分钟',
         run: () => {
           if (!setPomodoro(direct.argument)) return toast('请输入 1～180 分钟');
@@ -256,7 +271,8 @@ const CommandCenter = ({ open, onOpenChange, extraResults = [], onQueryChange })
           id: 'direct-calc', type: 'calc', title: `${direct.argument} = ${answer}`,
           subtitle: '点击复制结果',
           run: async () => {
-            await navigator.clipboard?.writeText(String(answer));
+            if (!navigator.clipboard?.writeText) throw new Error('当前环境无法访问剪贴板，请手动复制结果');
+            await navigator.clipboard.writeText(String(answer));
             toast('结果已复制');
           },
         });
@@ -296,15 +312,25 @@ const CommandCenter = ({ open, onOpenChange, extraResults = [], onQueryChange })
     }
 
     return [...items, ...externalItems, ...extraResults].slice(0, 12);
-  }, [query, browserResults, browserEnabled, extraResults]);
+  }, [open, query, browserResults, browserEnabled, extraResults]);
 
-  useEffect(() => setActiveIndex(0), [query, browserResults, extraResults]);
+  useEffect(() => setActiveIndex(0), [open, query, browserResults, extraResults]);
 
-  const runAt = (index) => {
+  useEffect(() => {
+    resultsRef.current?.querySelector(`[data-result-index="${activeIndex}"]`)
+      ?.scrollIntoView({ block: 'nearest' });
+  }, [activeIndex, open]);
+
+  const runAt = async (index) => {
     const item = results[index];
     if (!item) return;
-    if (!item.keepOpen) onOpenChange(false);
-    Promise.resolve(item.run?.()).catch((error) => toast(error?.message || '操作失败'));
+    try {
+      if (!item.keepOpen) onOpenChange(false);
+      // Invoke before awaiting so permission and clipboard actions keep the user gesture.
+      await item.run?.();
+    } catch (error) {
+      toast(error?.message || '操作失败');
+    }
   };
 
   return (
@@ -318,9 +344,10 @@ const CommandCenter = ({ open, onOpenChange, extraResults = [], onQueryChange })
             value={query}
             onChange={(event) => setQuery(event.target.value)}
             onKeyDown={(event) => {
+              if (isComposingEvent(event)) return;
               if (event.key === 'ArrowDown') {
                 event.preventDefault();
-                setActiveIndex((value) => Math.min(results.length - 1, value + 1));
+                setActiveIndex((value) => Math.max(0, Math.min(results.length - 1, value + 1)));
               } else if (event.key === 'ArrowUp') {
                 event.preventDefault();
                 setActiveIndex((value) => Math.max(0, value - 1));
@@ -334,12 +361,13 @@ const CommandCenter = ({ open, onOpenChange, extraResults = [], onQueryChange })
           />
           <kbd className="rounded-lg border px-2 py-1 text-xs text-gray-500">Esc</kbd>
         </div>
-        <div className="max-h-[420px] overflow-y-auto p-2">
+        <div ref={resultsRef} className="max-h-[420px] overflow-y-auto p-2">
           {results.length === 0 ? (
             <div className="px-4 py-10 text-center text-sm text-gray-500">没有匹配结果</div>
           ) : results.map((item, index) => (
             <button
               key={item.id}
+              data-result-index={index}
               type="button"
               onMouseEnter={() => setActiveIndex(index)}
               onClick={() => runAt(index)}
