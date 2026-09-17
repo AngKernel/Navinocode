@@ -2,7 +2,8 @@ import { createSupabaseClient, getSupabaseClientId } from "@/integrations/supaba
 import {
   captureFullSnapshot,
   getDeviceId,
-  saveAdvancedState,
+  applyFullSnapshot,
+  validateFullSnapshot,
 } from "@/advanced/storage";
 import { mergeSnapshots, snapshotsDiffer } from "@/advanced/syncMerge";
 
@@ -61,11 +62,6 @@ const dispatchConflict = (detail) => {
   window.dispatchEvent(new CustomEvent("navinocode:sync-conflict", { detail }));
 };
 
-const enrichPayload = (payload) => {
-  const local = captureFullSnapshot();
-  return mergeSnapshots(local, payload || {});
-};
-
 export const pullCloudState = async (config, table = DEFAULT_SYNC_TABLE, syncId) => {
   const client = createClientOrThrow(config);
   const clientId = syncId || getSupabaseClientId();
@@ -73,11 +69,12 @@ export const pullCloudState = async (config, table = DEFAULT_SYNC_TABLE, syncId)
   if (!remote) return { payload: null, updatedAt: null, revision: 0 };
 
   const local = captureFullSnapshot();
+  validateFullSnapshot(remote.payload);
   const payload = mergeSnapshots(local, remote.payload);
   const hadLocalDifferences = snapshotsDiffer(local, remote.payload);
 
-  if (payload.advancedState) saveAdvancedState(payload.advancedState, { preserveUpdatedAt: true });
-  writeBaseRevision(clientId, remote.revision);
+
+  writeBaseRevision(JSON.stringify([config.url, table, clientId]), remote.revision);
 
   if (hadLocalDifferences && remote.deviceId !== getDeviceId()) {
     dispatchConflict({
@@ -104,9 +101,11 @@ export const pushCloudState = async (
 ) => {
   const client = createClientOrThrow(config);
   const clientId = syncId || getSupabaseClientId();
-  const localPayload = enrichPayload(payload);
   const remote = await readRemote(client, table, clientId);
-  const baseRevision = readBaseRevision(clientId);
+  if (remote) validateFullSnapshot(remote.payload);
+  const localPayload = captureFullSnapshot();
+  const revisionScope = JSON.stringify([config.url, table, clientId]);
+  const baseRevision = readBaseRevision(revisionScope);
   const conflict = Boolean(
     remote &&
     remote.revision > baseRevision &&
@@ -127,8 +126,11 @@ export const pushCloudState = async (
   );
   if (error) throw error;
 
-  writeBaseRevision(clientId, revision);
-  if (finalPayload.advancedState) saveAdvancedState(finalPayload.advancedState, { preserveUpdatedAt: true });
+  writeBaseRevision(revisionScope, revision);
+  if (conflict) {
+    const current = captureFullSnapshot();
+    applyFullSnapshot(snapshotsDiffer(current, localPayload) ? mergeSnapshots(finalPayload, current) : finalPayload);
+  }
 
   if (conflict) {
     dispatchConflict({

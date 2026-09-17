@@ -6,3 +6,5 @@ extension/
 .serena/
 releases/
 .vscode/
+# Optional local browser regression output
+qa-output/
