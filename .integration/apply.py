@@ -70,6 +70,9 @@ def apply():
         else:
             original = p.read_bytes()
             assert blob_hash(original) == row['old'], f'base changed: {p}'
+        if row['new'] is None:
+            output.append((p, None))
+            continue
         lines = original.decode('utf-8').splitlines(keepends=True)
         last_start = len(lines)
         for start, end, replacement in reversed(row['edits']):

@@ -1,1 +1,2 @@
 Verified local edit recipe: 229f80b0418bb719199aaa55d15e6c094394208b0db29529cd824fd14bd78698
+Transfer revision 2: handle explicitly deleted source without a text replacement hunk.
