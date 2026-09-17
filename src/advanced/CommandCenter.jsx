@@ -3,7 +3,9 @@ import { Bookmark, Calculator, CheckSquare, Command, Globe, History, PanelsTopLe
 import { Dialog, DialogContent, DialogTitle } from '@/components/ui/dialog';
 import { Input } from '@/components/ui/input';
 import { toast } from 'sonner';
-import { getActiveWorkspace, loadAdvancedState } from './storage';
+import { getActiveWorkspace, loadAdvancedState, setWorkspaceSetting } from './storage';
+import { useWorkspaceStore } from './useWorkspaceStore';
+import { makeId } from './workspaceModel';
 import { EMPTY_RESULTS, isComposingEvent, parseTimerMinutes } from './interactionUtils.js';
 import {
   getBrowserPermissionState,
@@ -32,24 +34,17 @@ const safeArray = (value) => (Array.isArray(value) ? value : []);
 const addTodo = (text) => {
   const trimmed = String(text || '').trim();
   if (!trimmed) return false;
-  let todos = [];
-  try {
-    todos = safeArray(JSON.parse(localStorage.getItem('todos') || '[]'));
-  } catch {}
-  todos.push({ id: Date.now(), text: trimmed, completed: false });
-  localStorage.setItem('todos', JSON.stringify(todos));
+  const id = loadAdvancedState().activeWorkspaceId;
+  setWorkspaceSetting(id, 'todos', (todos) => [...todos, { id: makeId('todo'), text: trimmed, completed: false }]);
+  setWorkspaceSetting(id, 'componentSettings', (settings) => ({ ...settings, todo: true }));
   return true;
 };
-
 const setPomodoro = (minutes) => {
   const value = parseTimerMinutes(minutes);
   if (value === null) return false;
-  localStorage.setItem('pomodoro_minutes', String(value));
-  let settings = {};
-  try {
-    settings = JSON.parse(localStorage.getItem('componentSettings') || '{}') || {};
-  } catch {}
-  localStorage.setItem('componentSettings', JSON.stringify({ ...settings, pomodoro: true }));
+  const id = loadAdvancedState().activeWorkspaceId;
+  setWorkspaceSetting(id, 'pomodoroMinutes', value);
+  setWorkspaceSetting(id, 'componentSettings', (settings) => ({ ...settings, pomodoro: true }));
   return true;
 };
 
@@ -155,6 +150,7 @@ const resultIcon = (type) => {
 };
 
 const CommandCenter = ({ open, onOpenChange, extraResults = EMPTY_RESULTS, onQueryChange }) => {
+  const state = useWorkspaceStore();
   const [query, setQuery] = useState('');
   const [activeIndex, setActiveIndex] = useState(0);
   const [browserResults, setBrowserResults] = useState([]);
@@ -207,22 +203,15 @@ const CommandCenter = ({ open, onOpenChange, extraResults = EMPTY_RESULTS, onQue
 
   const results = useMemo(() => {
     if (!open) return EMPTY_RESULTS;
-    const state = loadAdvancedState();
     const workspace = getActiveWorkspace(state);
     const normalized = query.trim().toLowerCase();
-    const folderNames = new Map();
-    safeArray(workspace?.folders).forEach((folder) => {
-      safeArray(folder.appIds).forEach((appId) => folderNames.set(String(appId), folder.name));
-    });
-
-    const items = safeArray(workspace?.apps)
-      .filter((app) => !normalized || `${app?.name || ''} ${app?.url || ''}`.toLowerCase().includes(normalized))
+    const scope = normalized ? state.workspaces : [workspace];
+    const items = scope.flatMap((ws) => ws.apps.map((app) => ({ app, ws })))
+      .filter(({ app }) => !normalized || `${app.name} ${app.url}`.toLowerCase().includes(normalized))
       .slice(0, 8)
-      .map((app) => ({
-        id: `app-${app.id}`,
-        type: 'app',
-        title: app.name || app.url,
-        subtitle: folderNames.get(String(app.id)) || app.url,
+      .map(({ app, ws }) => ({
+        id: `app-${ws.id}-${app.id}`, type: 'app', title: app.name || app.url,
+        subtitle: `${ws.name} / ${ws.folders.find((folder) => folder.id === app.folderId)?.name || '未分组'} · ${app.url}`,
         run: () => openUrl(app.url),
       }));
 
@@ -241,7 +230,6 @@ const CommandCenter = ({ open, onOpenChange, extraResults = EMPTY_RESULTS, onQue
         run: () => {
           if (addTodo(direct.argument)) {
             toast('待办已添加');
-            setTimeout(() => window.location.reload(), 250);
           }
         },
       });
@@ -252,7 +240,6 @@ const CommandCenter = ({ open, onOpenChange, extraResults = EMPTY_RESULTS, onQue
         run: () => {
           if (!setPomodoro(direct.argument)) return toast('请输入 1～180 分钟');
           toast('番茄钟已设置');
-          setTimeout(() => window.location.reload(), 250);
         },
       });
     } else if (direct?.type === 'theme') {
@@ -260,8 +247,7 @@ const CommandCenter = ({ open, onOpenChange, extraResults = EMPTY_RESULTS, onQue
         id: 'direct-theme', type: 'theme', title: `切换到 ${direct.argument} 主题`,
         subtitle: 'theme light / dark / system',
         run: () => {
-          localStorage.setItem('themeMode', direct.argument);
-          window.location.reload();
+          setWorkspaceSetting(state.activeWorkspaceId, 'themeMode', direct.argument);
         },
       });
     } else if (direct?.type === 'calc') {
@@ -303,7 +289,7 @@ const CommandCenter = ({ open, onOpenChange, extraResults = EMPTY_RESULTS, onQue
     }
 
     if (query.trim() && !direct) {
-      const engine = localStorage.getItem('searchEngine') || 'bing';
+      const engine = workspace.settings.searchEngine;
       items.push({
         id: 'fallback-search', type: 'search', title: `搜索“${query.trim()}”`,
         subtitle: `使用 ${engine}`,
@@ -312,7 +298,7 @@ const CommandCenter = ({ open, onOpenChange, extraResults = EMPTY_RESULTS, onQue
     }
 
     return [...items, ...externalItems, ...extraResults].slice(0, 12);
-  }, [open, query, browserResults, browserEnabled, extraResults]);
+  }, [state, open, query, browserResults, browserEnabled, extraResults]);
 
   useEffect(() => setActiveIndex(0), [open, query, browserResults, extraResults]);
 
@@ -356,7 +342,7 @@ const CommandCenter = ({ open, onOpenChange, extraResults = EMPTY_RESULTS, onQue
                 runAt(activeIndex);
               }
             }}
-            placeholder="搜索应用、书签、标签页，或输入 g / todo / timer / calc / theme…"
+            placeholder="搜索所有工作区、书签、标签页，或输入 g / todo / timer / calc / theme…"
             className="h-16 border-0 bg-transparent px-0 text-base shadow-none focus-visible:ring-0"
           />
           <kbd className="rounded-lg border px-2 py-1 text-xs text-gray-500">Esc</kbd>

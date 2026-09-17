@@ -1,3 +1,5 @@
+import { SCHEMA_VERSION, DEFAULT_SETTINGS, normalizeWorkspace, normalizeTombstones, entityKey } from './workspaceModel.js';
+
 const safeArray = (value) => (Array.isArray(value) ? value : []);
 const safeObject = (value) => (value && typeof value === 'object' && !Array.isArray(value) ? value : {});
 
@@ -33,81 +35,79 @@ export const mergeEntityArrays = (base, incoming, prefix = 'item') => {
   return result;
 };
 
-const mergeFolders = (base, incoming) => {
-  const folders = mergeEntityArrays(base, incoming, 'folder');
-  return folders.map((folder) => {
-    const baseFolder = safeArray(base).find((item) => String(item?.id) === String(folder.id));
-    const incomingFolder = safeArray(incoming).find((item) => String(item?.id) === String(folder.id));
-    return {
-      ...folder,
-      appIds: [...new Set([
-        ...safeArray(baseFolder?.appIds).map(String),
-        ...safeArray(incomingFolder?.appIds).map(String),
-      ])],
-    };
-  });
+const later = (a, b) => (Date.parse(a) || 0) > (Date.parse(b) || 0);
+const mergeDeleted = (a, b) => {
+  const left = normalizeTombstones(a);
+  const right = normalizeTombstones(b);
+  return Object.fromEntries(Object.keys(left).map((group) => [group, {
+    ...left[group], ...Object.fromEntries(Object.entries(right[group]).map(([key, at]) =>
+      [key, later(left[group][key], at) ? left[group][key] : at])),
+  }]));
 };
-
-const mergeWorkspaceSettings = (base, incoming) => {
-  const left = safeObject(base);
-  const right = safeObject(incoming);
-  return {
-    ...left,
-    ...right,
-    todos: mergeEntityArrays(left.todos, right.todos, 'todo'),
-    componentSettings: {
-      ...safeObject(left.componentSettings),
-      ...safeObject(right.componentSettings),
-    },
-  };
+const normalizeForMerge = (state) => ({
+  ...safeObject(state),
+  workspaces: safeArray(state?.workspaces).map((ws, index) => ({
+    ...normalizeWorkspace(ws, index),
+    // Do not turn an omitted compact asset/partial setting into a clearing value.
+    settings: { ...safeObject(ws.settings) },
+  })),
+});
+const mergeVersioned = (left, right, deleted, scope, legacy = false) => {
+  const entries = new Map();
+  for (const item of [...safeArray(left), ...safeArray(right)]) {
+    if (!item || deleted[scope ? entityKey(scope, item.id) : String(item.id)]) continue;
+    const key = String(item.id);
+    const old = entries.get(key);
+    const winner = !old || legacy || !later(old.updatedAt, item.updatedAt) ? { ...old, ...item } : { ...item, ...old };
+    entries.set(key, winner);
+  }
+  return [...entries.values()];
 };
-
-const remapFolderApps = (folders, sourceApps, mergedApps) => {
-  const mergedIds = new Map(mergedApps.map((app, index) => [identity(app, 'app', index), String(app.id)]));
-  const sourceIds = new Map(safeArray(sourceApps).map((app, index) => [String(app?.id), mergedIds.get(identity(app, 'app', index))]));
-  return safeArray(folders).map((folder) => ({
-    ...folder,
-    appIds: [...new Set(safeArray(folder?.appIds).map((id) => sourceIds.get(String(id)) || String(id)))],
-  }));
-};
-
-const mergeWorkspaces = (base, incoming) => {
-  const workspaces = mergeEntityArrays(base, incoming, 'workspace');
-  return workspaces.map((workspace) => {
-    const baseWorkspace = safeArray(base).find((item) => String(item?.id) === String(workspace.id));
-    const incomingWorkspace = safeArray(incoming).find((item) => String(item?.id) === String(workspace.id));
-    const apps = mergeEntityArrays(baseWorkspace?.apps, incomingWorkspace?.apps, 'app');
-    return {
-      ...baseWorkspace,
-      ...incomingWorkspace,
-      ...workspace,
-      apps,
-      folders: mergeFolders(
-        remapFolderApps(baseWorkspace?.folders, baseWorkspace?.apps, apps),
-        remapFolderApps(incomingWorkspace?.folders, incomingWorkspace?.apps, apps),
-      ),
-      settings: mergeWorkspaceSettings(baseWorkspace?.settings, incomingWorkspace?.settings),
-      updatedAt: incomingWorkspace?.updatedAt || baseWorkspace?.updatedAt || workspace.updatedAt,
-    };
-  });
-};
-
 const mergeAdvancedState = (base, incoming) => {
   if (!base && !incoming) return undefined;
-  const baseState = safeObject(base);
-  const incomingState = safeObject(incoming);
-  const workspaces = mergeWorkspaces(baseState.workspaces, incomingState.workspaces);
-  const requestedActiveId = incomingState.activeWorkspaceId || baseState.activeWorkspaceId;
-  const activeWorkspaceId = workspaces.some((workspace) => workspace.id === requestedActiveId)
-    ? requestedActiveId
-    : workspaces[0]?.id;
+  if (Math.max(Number(base?.schemaVersion || 0), Number(incoming?.schemaVersion || 0)) > SCHEMA_VERSION) {
+    throw new Error('配置来自更新版本，请先升级 Navinocode');
+  }
+  const left = normalizeForMerge(base);
+  const right = normalizeForMerge(incoming);
+  const legacy = (base && Number(base.schemaVersion || 0) < SCHEMA_VERSION) || (incoming && Number(incoming.schemaVersion || 0) < SCHEMA_VERSION);
+  const tombstones = mergeDeleted(base?.tombstones, incoming?.tombstones);
+  const workspaceHeaders = mergeVersioned(left.workspaces, right.workspaces, tombstones.workspaces, '', legacy);
+  const workspaces = workspaceHeaders.map((header) => {
+    const a = left.workspaces.find((ws) => ws.id === header.id);
+    const b = right.workspaces.find((ws) => ws.id === header.id);
+    const aApps = safeArray(a?.apps).filter((app) => !tombstones.apps[entityKey(header.id, app.id)]);
+    const bApps = safeArray(b?.apps).filter((app) => !tombstones.apps[entityKey(header.id, app.id)]);
+    let apps = legacy ? mergeEntityArrays(aApps, bApps, 'app') : mergeVersioned(aApps, bApps, tombstones.apps, header.id);
+    const folders = mergeVersioned(a?.folders, b?.folders, tombstones.folders, header.id, legacy);
+    const folderIds = new Set(folders.map((folder) => folder.id));
+    // Unrelated setting edits must not revert a rename or a Dock reorder.
+    const nameSource = !b || (!legacy && a && later(a.nameUpdatedAt, b.nameUpdatedAt)) ? a : b;
+    const orderSource = !b || (!legacy && a && later(a.orderUpdatedAt, b.orderUpdatedAt)) ? a : b;
+    const order = new Map(safeArray(orderSource?.apps).map((app, i) => [String(app.id), i]));
+    apps.sort((x, y) => (order.get(x.id) ?? Infinity) - (order.get(y.id) ?? Infinity));
+    apps = apps.map((app) => ({ ...app, folderId: folderIds.has(app.folderId) ? app.folderId : null }));
+    const settings = {};
+    const settingVersions = {};
+    for (const key of Object.keys(DEFAULT_SETTINGS)) {
+      const aValue = a?.settings?.[key];
+      const bValue = b?.settings?.[key];
+      const aTime = a?.settingVersions?.[key] || a?.updatedAt || '';
+      const bTime = b?.settingVersions?.[key] || b?.updatedAt || '';
+      const useB = bValue !== undefined && (aValue === undefined || legacy || !later(aTime, bTime));
+      if (aValue !== undefined || bValue !== undefined) settings[key] = useB ? bValue : aValue;
+      if (aTime || bTime) settingVersions[key] = useB ? bTime : aTime;
+    }
+    settings.todos = mergeVersioned(a?.settings?.todos, b?.settings?.todos, tombstones.todos, header.id, legacy);
+    return { ...header, name: nameSource?.name || header.name, nameUpdatedAt: nameSource?.nameUpdatedAt,
+      orderUpdatedAt: orderSource?.orderUpdatedAt, apps, folders, settings, settingVersions };
+  });
+  if (!workspaces.length) throw new Error('两端删除操作冲突，不能删除全部工作区；本地数据未覆盖');
+  const requestedId = right.activeWorkspaceId || left.activeWorkspaceId;
   return {
-    ...baseState,
-    ...incomingState,
-    schemaVersion: Math.max(Number(baseState.schemaVersion || 0), Number(incomingState.schemaVersion || 0), 3),
-    activeWorkspaceId,
-    workspaces,
-    updatedAt: incomingState.updatedAt || baseState.updatedAt,
+    ...left, ...right, schemaVersion: SCHEMA_VERSION, tombstones, workspaces,
+    activeWorkspaceId: workspaces.some((ws) => ws.id === requestedId) ? requestedId : workspaces[0].id,
+    updatedAt: later(left.updatedAt, right.updatedAt) ? left.updatedAt : right.updatedAt,
   };
 };
 
@@ -131,7 +131,7 @@ const withLegacyWorkspace = (snapshot, reference) => {
   return {
     ...snapshot,
     advancedState: {
-      schemaVersion: state.schemaVersion,
+      schemaVersion: 3,
       activeWorkspaceId: active.id,
       workspaces: [{ id: active.id, apps: safeArray(snapshot.apps), folders: [], settings }],
       updatedAt: state.updatedAt,
@@ -156,7 +156,7 @@ export const mergeSnapshots = (base, incoming) => {
     const active = advancedState.workspaces.find((workspace) => workspace.id === advancedState.activeWorkspaceId);
     if (active) {
       // Legacy fields are a projection of the active workspace, not a union of workspaces.
-      merged.apps = active.apps;
+      merged.apps = active.apps.filter((app) => !app.folderId);
       const settings = safeObject(active.settings);
       if (Array.isArray(settings.todos)) merged.todos = settings.todos;
       if (settings.componentSettings) merged.componentSettings = safeObject(settings.componentSettings);
@@ -171,6 +171,7 @@ export const mergeSnapshots = (base, incoming) => {
         'bottomCount',
         'widgetPositions',
         'widgetPins',
+        'pomodoroMinutes',
       ].forEach((key) => {
         if (settings[key] !== undefined) merged[key] = settings[key];
       });
@@ -188,6 +189,12 @@ export const stableSnapshotString = (value) => {
       return output;
     }, {});
   };
+  // Active workspace and top-level compatibility fields are projections, not
+  // synchronized user data. Different devices may view different scenes.
+  if (value?.advancedState?.schemaVersion === SCHEMA_VERSION) {
+    const { activeWorkspaceId, ...state } = value.advancedState;
+    return JSON.stringify(normalize(state));
+  }
   return JSON.stringify(normalize(value));
 };
 

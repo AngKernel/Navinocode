@@ -15,14 +15,32 @@ import {
   pullNativeSnapshot,
   pushNativeSnapshot,
 } from './nativeSync';
-import { isNativeSyncEnabled } from './storage';
+import { ADVANCED_KEYS, isNativeSyncEnabled } from './storage';
 
 const SyncControls = () => {
   const [permissions, setPermissions] = useState({});
   const [nativeEnabled, setNativeEnabledState] = useState(() => isNativeSyncEnabled());
   const [busy, setBusy] = useState(false);
+  const [syncError, setSyncError] = useState('');
+  const [lastSuccess, setLastSuccess] = useState('');
+  useEffect(() => {
+    const refresh = () => setNativeEnabledState(isNativeSyncEnabled());
+    const error = (event) => setSyncError(event.detail?.message || '同步失败');
+    const success = () => { setSyncError(''); setLastSuccess(new Date().toLocaleString()); };
+    const storage = (event) => { if (event.key === ADVANCED_KEYS.NATIVE_SYNC_ENABLED_KEY || event.key === null) refresh(); };
+    window.addEventListener('navinocode:native-sync-setting', refresh);
+    window.addEventListener('navinocode:native-sync-error', error);
+    window.addEventListener('navinocode:native-sync-success', success);
+    window.addEventListener('storage', storage);
+    return () => {
+      window.removeEventListener('navinocode:native-sync-setting', refresh);
+      window.removeEventListener('navinocode:native-sync-error', error);
+      window.removeEventListener('navinocode:native-sync-success', success);
+      window.removeEventListener('storage', storage);
+    };
+  }, []);
 
-  const refreshPermissions = async () => setPermissions(await getBrowserPermissionState());
+  const refreshPermissions = async () => { try { setPermissions(await getBrowserPermissionState()); } catch { setPermissions({}); } };
   useEffect(() => { refreshPermissions(); }, []);
 
   const enableBrowserSearch = async () => {
@@ -44,6 +62,7 @@ const SyncControls = () => {
       setNativeEnabledState(true);
       toast('浏览器原生同步已启用');
     } catch (error) {
+      setSyncError(error.message || '同步失败');
       toast(error.message || '启用同步失败');
     } finally {
       setBusy(false);
@@ -55,8 +74,9 @@ const SyncControls = () => {
     try {
       const result = direction === 'push' ? await pushNativeSnapshot() : await pullNativeSnapshot();
       toast(direction === 'push' ? '已上传到浏览器账户' : result.found ? '已从浏览器账户恢复' : '浏览器账户暂无数据');
-      if (direction === 'pull' && result.changed) setTimeout(() => window.location.reload(), 250);
+      setSyncError(''); setLastSuccess(new Date().toLocaleString());
     } catch (error) {
+      setSyncError(error.message || '同步失败');
       toast(error.message || '同步失败');
     } finally {
       setBusy(false);
@@ -89,6 +109,8 @@ const SyncControls = () => {
       </div>
 
       <div className="border-t pt-5">
+        {syncError && <p role="alert" className="mb-2 text-sm text-red-600">{syncError}</p>}
+        {lastSuccess && <p className="mb-2 text-xs text-muted-foreground">本页最近同步成功：{lastSuccess}</p>}
         <div className="mb-2 flex items-center gap-2 font-semibold">
           <Cloud className="h-4 w-4" />浏览器原生同步
         </div>

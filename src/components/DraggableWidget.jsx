@@ -1,5 +1,7 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { Pin, PinOff } from 'lucide-react';
+import { useWorkspaceSetting } from '@/advanced/useWorkspaceStore';
+import { parseJSON } from '@/advanced/workspaceModel';
 
 // 通用可拖动小组件包装器：fixed 定位，位置保存在 localStorage(widget_positions)
 // props: id (string, 必填), defaultPos: { x, y }, children
@@ -9,13 +11,15 @@ const STORAGE_KEY = 'widget_positions';
 const PIN_STORAGE_KEY = 'widget_pins';
 
 const DraggableWidget = ({ id, defaultPos = { x: 24, y: 24 }, children }) => {
+  const [storedPositions, setStoredPositions] = useWorkspaceSetting('widgetPositions');
+  const [storedPins, setStoredPins] = useWorkspaceSetting('widgetPins');
   // 懒加载初始位置，避免首帧抖动
   const [pos, setPos] = useState(() => {
     try {
-      const raw = localStorage.getItem(STORAGE_KEY);
+      const raw = storedPositions;
       if (raw) {
         const all = JSON.parse(raw);
-        if (all && all[id]) return all[id];
+        if (all && Number.isFinite(all[id]?.x) && Number.isFinite(all[id]?.y)) return all[id];
       }
     } catch {
       // ignore
@@ -31,7 +35,7 @@ const DraggableWidget = ({ id, defaultPos = { x: 24, y: 24 }, children }) => {
   // 懒加载固定状态，确保首帧就是正确的固定/贴边状态
   const [isPinned, setIsPinned] = useState(() => {
     try {
-      const rawPins = localStorage.getItem(PIN_STORAGE_KEY);
+      const rawPins = storedPins;
       if (rawPins) {
         const pins = JSON.parse(rawPins);
         if (typeof pins?.[id] === 'boolean') return pins[id];
@@ -47,10 +51,10 @@ const DraggableWidget = ({ id, defaultPos = { x: 24, y: 24 }, children }) => {
   // 当 id 变化时重新从存储恢复（通常 id 稳定，此处为健壮性处理）
   useEffect(() => {
     try {
-      const raw = localStorage.getItem(STORAGE_KEY);
+      const raw = storedPositions;
       if (raw) {
         const all = JSON.parse(raw);
-        if (all && all[id]) {
+        if (all && Number.isFinite(all[id]?.x) && Number.isFinite(all[id]?.y)) {
           setPos(all[id]);
           posRef.current = all[id];
         } else {
@@ -67,7 +71,7 @@ const DraggableWidget = ({ id, defaultPos = { x: 24, y: 24 }, children }) => {
     }
 
     try {
-      const rawPins = localStorage.getItem(PIN_STORAGE_KEY);
+      const rawPins = storedPins;
       if (rawPins) {
         const pins = JSON.parse(rawPins);
         if (typeof pins?.[id] === 'boolean') setIsPinned(pins[id]);
@@ -78,7 +82,7 @@ const DraggableWidget = ({ id, defaultPos = { x: 24, y: 24 }, children }) => {
     } catch {
       setIsPinned(false);
     }
-  }, [id, defaultPos.x, defaultPos.y]);
+  }, [id, defaultPos.x, defaultPos.y, storedPositions, storedPins]);
 
   // 同步最新位置到 ref，避免事件回调闭包导致的过期值
   useEffect(() => {
@@ -102,27 +106,8 @@ const DraggableWidget = ({ id, defaultPos = { x: 24, y: 24 }, children }) => {
     };
   }, []);
 
-  const savePos = (p) => {
-    try {
-      const raw = localStorage.getItem(STORAGE_KEY);
-      const all = raw ? JSON.parse(raw) : {};
-      all[id] = p;
-      localStorage.setItem(STORAGE_KEY, JSON.stringify(all));
-    } catch {
-      // ignore
-    }
-  };
-
-  const savePin = (val) => {
-    try {
-      const raw = localStorage.getItem(PIN_STORAGE_KEY);
-      const pins = raw ? JSON.parse(raw) : {};
-      pins[id] = val;
-      localStorage.setItem(PIN_STORAGE_KEY, JSON.stringify(pins));
-    } catch {
-      // ignore
-    }
-  };
+  const savePos = (p) => setStoredPositions((raw) => JSON.stringify({ ...parseJSON(raw, {}), [id]: p }));
+  const savePin = (val) => setStoredPins((raw) => JSON.stringify({ ...parseJSON(raw, {}), [id]: val }));
 
   // 视口缩小时把已保存的位置重新约束到可见区域。
   useEffect(() => {

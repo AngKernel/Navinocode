@@ -6,6 +6,7 @@ globalThis.CustomEvent ??= class CustomEvent extends Event {
 };
 import assert from 'node:assert/strict';
 import * as storage from '../src/advanced/storage.js';
+import { SCHEMA_VERSION } from '../src/advanced/workspaceModel.js';
 import { mergeEntityArrays, mergeSnapshots, stableSnapshotString } from '../src/advanced/syncMerge.js';
 import * as native from '../src/advanced/nativeSync.js';
 
@@ -22,8 +23,23 @@ const CHUNK = 'navinocode_sync_chunk_';
 const HASH = 'navinocode_native_sync_hash';
 let remote, intervals, timeouts, listeners, stats, failGet, beforeGet, beforeSet;
 const flush = async () => { for (let i = 0; i < 30; i++) await Promise.resolve(); };
-const app = (id, url = `https://example.com/${id}`) => ({ id, name: `App ${id}`, url });
-const write = (key, value) => localStorage.setItem(key, JSON.stringify(value));
+const app = (id, url = `https://example.com/${id}`) => ({ id: String(id), name: `App ${id}`, url });
+// Before migration seed legacy storage; afterwards all edits go through the
+// canonical store, just like the UI. Raw legacy writes are tested separately.
+const write = (key, value) => {
+  if (localStorage.getItem(storage.ADVANCED_KEYS.ADVANCED_STATE_KEY)) {
+    const id = storage.loadAdvancedState().activeWorkspaceId;
+    if (key === 'apps') return storage.setWorkspaceApps(id, value);
+    return storage.setWorkspaceSetting(id, key, value);
+  }
+  localStorage.setItem(key, JSON.stringify(value));
+};
+const setScalar = (key, value) => {
+  if (!localStorage.getItem(storage.ADVANCED_KEYS.ADVANCED_STATE_KEY)) return localStorage.setItem(key, value);
+  return storage.setWorkspaceSetting(storage.loadAdvancedState().activeWorkspaceId, key, value);
+};
+const activeApps = () => storage.getActiveWorkspace(storage.loadAdvancedState()).apps;
+const plainApps = (apps = activeApps()) => apps.map(({ folderId, updatedAt, ...app }) => app);
 const seed = () => {
   write('apps', [app(1)]);
   write('todos', [{ id: 1, text: 'existing', completed: false }]);
@@ -126,16 +142,16 @@ test('workspace reader tolerates invalid stored JSON', () => {
   assert.equal(storage.readWorkspaceSettings().componentSettings.todo, false);
 });
 
-test('renaming captures live apps, todos and settings without writing stale legacy values', () => {
+test('renaming reads the latest store instead of the stale manager snapshot', () => {
   const state = seed();
   write('apps', [app(2)]);
   write('todos', [{ id: 2, text: 'new edit', completed: true }]);
-  localStorage.setItem('themeMode', 'dark');
+  setScalar('themeMode', 'dark');
   const next = storage.renameWorkspace(state, state.activeWorkspaceId, 'renamed');
   assert.equal(storage.getActiveWorkspace(next).name, 'renamed');
-  assert.deepEqual(storage.readLegacyApps(), [app(2)]);
+  assert.deepEqual(plainApps(), [app(2)]);
   assert.equal(storage.getActiveWorkspace(next).settings.todos[0].text, 'new edit');
-  assert.equal(localStorage.getItem('themeMode'), 'dark');
+  assert.equal(storage.readWorkspaceSettings().themeMode, 'dark');
 });
 
 test('all folder metadata operations preserve edits made after the manager loaded', () => {
@@ -149,33 +165,33 @@ test('all folder metadata operations preserve edits made after the manager loade
     (value) => storage.addFolder(value, 'another'),
   ]) {
     write('apps', [app(2)]);
-    localStorage.setItem('backgroundImage', 'local-background');
+    setScalar('backgroundImage', 'local-background');
     state = operation(state);
-    assert.deepEqual(storage.readLegacyApps(), [app(2)]);
-    assert.equal(localStorage.getItem('backgroundImage'), 'local-background');
-    assert.deepEqual(storage.getActiveWorkspace(state).apps, [app(2)]);
+    assert.deepEqual(plainApps(), [app(2)]);
+    assert.equal(storage.readWorkspaceSettings().backgroundImage, 'local-background');
+    assert.deepEqual(plainApps(storage.getActiveWorkspace(state).apps), [app(2)]);
   }
 });
 
 test('compact snapshot round trip keeps omitted local background and data icons', () => {
   seed();
   write('apps', [{ ...app(1), icon: 'data:image/png;base64,LOCAL' }]);
-  localStorage.setItem('backgroundImage', 'data:image/png;base64,BACKGROUND');
+  setScalar('backgroundImage', 'data:image/png;base64,BACKGROUND');
   const compact = storage.captureFullSnapshot({ compact: true });
   assert.equal(compact.backgroundImage, undefined);
   assert.equal(compact.apps[0].icon, undefined);
   compact.advancedState.workspaces[0].apps[0].name = 'remote rename';
   storage.applyFullSnapshot(compact);
-  assert.equal(localStorage.getItem('backgroundImage'), 'data:image/png;base64,BACKGROUND');
-  assert.equal(storage.readLegacyApps()[0].icon, 'data:image/png;base64,LOCAL');
-  assert.equal(storage.readLegacyApps()[0].name, 'remote rename');
+  assert.equal(storage.readWorkspaceSettings().backgroundImage, 'data:image/png;base64,BACKGROUND');
+  assert.equal(plainApps()[0].icon, 'data:image/png;base64,LOCAL');
+  assert.equal(plainApps()[0].name, 'remote rename');
 });
 
 test('compact assets are restored per workspace, not copied from the active workspace', () => {
   let state = seed();
-  localStorage.setItem('backgroundImage', 'first-background');
+  setScalar('backgroundImage', 'first-background');
   state = storage.addWorkspace(state, 'second');
-  localStorage.setItem('backgroundImage', 'second-background');
+  setScalar('backgroundImage', 'second-background');
   const compact = storage.captureFullSnapshot({ compact: true });
   storage.applyFullSnapshot(compact);
   const restored = storage.loadAdvancedState({ captureLegacy: false });
@@ -186,13 +202,13 @@ test('compact assets are restored per workspace, not copied from the active work
 test('explicit empty background and icon in a full snapshot still clear assets', () => {
   seed();
   write('apps', [{ ...app(1), icon: 'data:image/png;base64,LOCAL' }]);
-  localStorage.setItem('backgroundImage', 'local-background');
+  setScalar('backgroundImage', 'local-background');
   const snapshot = storage.captureFullSnapshot();
   snapshot.advancedState.workspaces[0].settings.backgroundImage = '';
   snapshot.advancedState.workspaces[0].apps[0].icon = '';
   storage.applyFullSnapshot(snapshot);
-  assert.equal(localStorage.getItem('backgroundImage'), null);
-  assert.equal(storage.readLegacyApps()[0].icon, '');
+  assert.equal(storage.readWorkspaceSettings().backgroundImage, '');
+  assert.equal(plainApps()[0].icon, '');
 });
 
 test('malformed advanced snapshot is rejected before any earlier top-level keys are written', () => {
@@ -206,8 +222,8 @@ test('future schema version does not overwrite local data', () => {
   seed();
   const snapshot = storage.captureFullSnapshot();
   const before = [...localStorage.values];
-  snapshot.advancedState.schemaVersion = 4;
-  assert.throws(() => storage.applyFullSnapshot(snapshot), /版本较新/);
+  snapshot.advancedState.schemaVersion = SCHEMA_VERSION + 1;
+  assert.throws(() => storage.applyFullSnapshot(snapshot), /更新版本/);
   assert.deepEqual([...localStorage.values], before);
 });
 
@@ -229,8 +245,8 @@ test('invalid todo and app shapes are rejected', () => {
 
 test('legacy top-level snapshots can still be applied', () => {
   storage.applyFullSnapshot({ apps: [app(3)], todos: [], backgroundBrightness: 0 });
-  assert.deepEqual(storage.readLegacyApps(), [app(3)]);
-  assert.equal(localStorage.getItem('backgroundBrightness'), '0');
+  assert.deepEqual(plainApps(), [app(3)]);
+  assert.equal(storage.readWorkspaceSettings().backgroundBrightness, 0);
 });
 
 test('URL paths and query values remain case sensitive during deduplication', () => {
@@ -241,7 +257,7 @@ test('URL paths and query values remain case sensitive during deduplication', ()
 test('URL hostname case and normalized root URLs deduplicate', () => {
   const merged = mergeEntityArrays([app(1, 'https://EXAMPLE.com')], [app(2, 'https://example.com/')], 'app');
   assert.equal(merged.length, 1);
-  assert.equal(merged[0].id, 2);
+  assert.equal(merged[0].id, '2');
 });
 
 test('folders retain app membership when URL deduplication changes app ids', () => {
@@ -250,7 +266,8 @@ test('folders retain app membership when URL deduplication changes app ids', () 
   const incoming = { advancedState: { activeWorkspaceId: 'w', workspaces: [workspace(2)] } };
   const active = mergeSnapshots(base, incoming).advancedState.workspaces[0];
   assert.equal(active.apps.length, 1);
-  assert.deepEqual(active.folders[0].appIds, [String(active.apps[0].id)]);
+  assert.equal(active.apps[0].folderId, 'f');
+  assert.equal(active.folders[0].appIds, undefined);
 });
 
 test('legacy apps project only the active workspace instead of combining different workspaces', () => {
@@ -258,7 +275,7 @@ test('legacy apps project only the active workspace instead of combining differe
   const second = { id: 'second', apps: [app(2)], folders: [], settings: {} };
   const base = { apps: first.apps, advancedState: { activeWorkspaceId: 'first', workspaces: [first, second] } };
   const incoming = { apps: second.apps, advancedState: { activeWorkspaceId: 'second', workspaces: [first, second] } };
-  assert.deepEqual(mergeSnapshots(base, incoming).apps, [app(2)]);
+  assert.deepEqual(plainApps(mergeSnapshots(base, incoming).apps), [app(2)]);
 });
 
 test('web mode reports unsupported browser sync', async () => {
@@ -397,7 +414,7 @@ test('edits made during a conflicting upload are retained locally for the next p
   };
   const result = await native.pushNativeSnapshot();
   assert.equal(result.conflict, true);
-  assert.ok(storage.readLegacyApps().some((value) => value.id === 3));
+  assert.ok(activeApps().some((value) => value.id === '3'));
   assert.notEqual(stableSnapshotString(storage.captureFullSnapshot({ compact: true })), localStorage.getItem(HASH));
 });
 
@@ -406,8 +423,8 @@ test('legacy incoming cloud apps and settings survive an advanced-state merge', 
   const merged = mergeSnapshots(storage.captureFullSnapshot(), {
     apps: [app(2)], todos: [{ id: 2, text: 'legacy todo' }], searchEngine: 'google',
   });
-  assert.ok(merged.apps.some((value) => value.id === 2));
-  assert.ok(merged.advancedState.workspaces[0].apps.some((value) => value.id === 2));
+  assert.ok(merged.apps.some((value) => value.id === '2'));
+  assert.ok(merged.advancedState.workspaces[0].apps.some((value) => value.id === '2'));
   assert.ok(merged.todos.some((value) => value.text === 'legacy todo'));
   assert.equal(merged.searchEngine, 'google');
 });
@@ -415,7 +432,7 @@ test('legacy incoming cloud apps and settings survive an advanced-state merge', 
 test('legacy local apps survive when merging a remote advanced snapshot', () => {
   seed();
   const merged = mergeSnapshots({ apps: [app(2)] }, storage.captureFullSnapshot());
-  assert.ok(merged.apps.some((value) => value.id === 2));
+  assert.ok(merged.apps.some((value) => value.id === '2'));
 });
 
 test('empty partial payload does not alter the active workspace', () => {

@@ -157,6 +157,7 @@ export const pushNativeSnapshot = ({ signal } = {}) => enqueueSync(async () => {
     applyFullSnapshot(snapshotsDiffer(current, localPayload) ? mergeSnapshots(payload, current) : payload);
     dispatchMerge('浏览器同步存在并发修改，上传前已自动合并。', { revision });
   }
+  window.dispatchEvent(new CustomEvent('navinocode:native-sync-success'));
   return { revision, conflict, payload };
 });
 
@@ -177,6 +178,7 @@ export const pullNativeSnapshot = ({ signal } = {}) => enqueueSync(async () => {
   if (changed && remote.deviceId !== getDeviceId()) {
     dispatchMerge('已合并浏览器账户中的配置与本地修改。', { revision: remote.revision });
   }
+  window.dispatchEvent(new CustomEvent('navinocode:native-sync-success'));
   return { found: true, changed, payload, revision: remote.revision };
 });
 
