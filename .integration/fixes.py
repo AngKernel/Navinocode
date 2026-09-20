@@ -8,14 +8,18 @@ p.write_text(s)
 print('Applied current-window session smoke semantics; new-window transport covered by unit tests')
 p = Path('tests/state-sync.test.js')
 s = p.read_text()
+anchor = "import * as native from '../src/advanced/nativeSync.js';"
+assert s.count(anchor) == 1
+s = s.replace(anchor, anchor + "\nimport { getSyncDiagnostics } from '../src/advanced/syncDiagnostics.js';")
 old = "  await assert.rejects(native.pullNativeSnapshot(), /尚未完整/);\n  assert.deepEqual([...localStorage.values], before);"
-new = """  await assert.rejects(native.pullNativeSnapshot(), /尚未完整/);
+new = """  const previousSuccess = getSyncDiagnostics('browser').lastSuccess;
+  await assert.rejects(native.pullNativeSnapshot(), /尚未完整/);
   // Failure diagnostics are expected; every pre-existing business/storage key
   // must still be byte-for-byte unchanged, with no partial recovery or revision.
   assert.deepEqual([...localStorage.values].filter(([key]) => key !== 'navinocode_sync_diagnostics_v1'), before);
   const diagnostic = JSON.parse(localStorage.getItem('navinocode_sync_diagnostics_v1')).scopes.browser;
   assert.equal(diagnostic.lastResult, 'error');
   assert.match(diagnostic.lastError, /尚未完整/);
-  assert.equal(diagnostic.lastSuccess, undefined);"""
+  assert.equal(diagnostic.lastSuccess, previousSuccess);"""
 assert s.count(old) == 1
 p.write_text(s.replace(old, new))
