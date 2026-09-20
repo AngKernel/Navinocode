@@ -9,6 +9,7 @@ import * as storage from '../src/advanced/storage.js';
 import { SCHEMA_VERSION } from '../src/advanced/workspaceModel.js';
 import { mergeEntityArrays, mergeSnapshots, stableSnapshotString } from '../src/advanced/syncMerge.js';
 import * as native from '../src/advanced/nativeSync.js';
+import { getSyncDiagnostics } from '../src/advanced/syncDiagnostics.js';
 
 class MemoryStorage {
   values = new Map();
@@ -22,7 +23,7 @@ const META = 'navinocode_sync_meta';
 const CHUNK = 'navinocode_sync_chunk_';
 const HASH = 'navinocode_native_sync_hash';
 let remote, intervals, timeouts, listeners, stats, failGet, beforeGet, beforeSet;
-const flush = async () => { for (let i = 0; i < 30; i++) await Promise.resolve(); };
+const flush = async () => { for (let i = 0; i < 10; i++) { await new Promise((resolve) => setImmediate(resolve)); for (let j = 0; j < 10; j++) await Promise.resolve(); } };
 const app = (id, url = `https://example.com/${id}`) => ({ id: String(id), name: `App ${id}`, url });
 // Before migration seed legacy storage; afterwards all edits go through the
 // canonical store, just like the UI. Raw legacy writes are tested separately.
@@ -377,8 +378,15 @@ test('incomplete chunks are rejected without altering local configuration', asyn
   setRemote(storage.captureFullSnapshot({ compact: true }));
   delete remote[`${CHUNK}0`];
   const before = [...localStorage.values];
+  const previousSuccess = getSyncDiagnostics('browser').lastSuccess;
   await assert.rejects(native.pullNativeSnapshot(), /尚未完整/);
-  assert.deepEqual([...localStorage.values], before);
+  // Failure diagnostics are expected; every pre-existing business/storage key
+  // must still be byte-for-byte unchanged, with no partial recovery or revision.
+  assert.deepEqual([...localStorage.values].filter(([key]) => key !== 'navinocode_sync_diagnostics_v1'), before);
+  const diagnostic = JSON.parse(localStorage.getItem('navinocode_sync_diagnostics_v1')).scopes.browser;
+  assert.equal(diagnostic.lastResult, 'error');
+  assert.match(diagnostic.lastError, /尚未完整/);
+  assert.equal(diagnostic.lastSuccess, previousSuccess);
 });
 
 test('metadata/envelope revision mismatches are rejected', async () => {

@@ -1,5 +1,6 @@
+import SessionManager from './SessionManager';
 import React, { useEffect, useState } from 'react';
-import { Command, LayoutGrid } from 'lucide-react';
+import { Command, LayoutGrid, PanelsTopLeft } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { toast } from 'sonner';
 import CommandCenter from './CommandCenter';
@@ -12,6 +13,7 @@ const AdvancedFeatures = () => {
   const [commandOpen, setCommandOpen] = useState(false);
   const [workspaceOpen, setWorkspaceOpen] = useState(false);
   const [initialFolderId, setInitialFolderId] = useState('');
+  const [sessionOpen, setSessionOpen] = useState(false);
 
   useEffect(() => {
     const openLibrary = (event) => { setInitialFolderId(event.detail?.folderId || ''); setWorkspaceOpen(true); };
@@ -45,7 +47,7 @@ const AdvancedFeatures = () => {
 
   return (
     <>
-      <div className="fixed left-4 top-6 sm:left-6 z-20 flex max-w-[calc(100vw-3rem)] items-center gap-2">
+      <div className="fixed left-4 top-6 sm:left-6 z-20 flex max-w-[calc(100vw-6rem)] items-center gap-2">
         <Button
           type="button"
           variant="outline"
@@ -71,8 +73,13 @@ const AdvancedFeatures = () => {
         >
           <LayoutGrid className="h-5 w-5" />
         </Button>
+        <Button type="button" variant="outline" size="icon" aria-label="打开工作会话" title="保存和恢复标签页会话"
+          onClick={() => setSessionOpen(true)} className="h-10 w-10 shrink-0 rounded-full opacity-80 backdrop-blur-md transition-opacity hover:opacity-100">
+          <PanelsTopLeft className="h-5 w-5" />
+        </Button>
       </div>
 
+      <SessionManager open={sessionOpen} onOpenChange={setSessionOpen} />
       <WorkspaceHomeFolders />
       <CommandCenter open={commandOpen} onOpenChange={setCommandOpen} />
       <WorkspaceManager open={workspaceOpen} onOpenChange={setWorkspaceOpen} initialFolderId={initialFolderId} />

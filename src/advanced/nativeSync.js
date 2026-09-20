@@ -1,3 +1,4 @@
+import { observeSync } from './syncDiagnostics.js';
 import {
   ADVANCED_KEYS,
   applyFullSnapshot,
@@ -124,7 +125,7 @@ const dispatchMerge = (message, detail = {}) => {
   }));
 };
 
-export const pushNativeSnapshot = ({ signal } = {}) => enqueueSync(async () => {
+export const pushNativeSnapshot = ({ signal } = {}) => enqueueSync(() => observeSync('browser', 'browser', 'push', async () => {
   assertActive(signal);
   if (!hasNativeSync()) throw new Error('请在 Edge/Chromium 扩展中使用浏览器同步');
   const remote = await readNativeEnvelope(signal);
@@ -135,7 +136,6 @@ export const pushNativeSnapshot = ({ signal } = {}) => enqueueSync(async () => {
   const conflict = Boolean(
     remote &&
     Number(remote.revision || 0) > baseRevision &&
-    remote.deviceId !== getDeviceId() &&
     snapshotsDiffer(remote.payload, localPayload)
   );
   const payload = conflict ? mergeSnapshots(remote.payload, localPayload) : localPayload;
@@ -149,19 +149,19 @@ export const pushNativeSnapshot = ({ signal } = {}) => enqueueSync(async () => {
   };
   await writeNativeEnvelope(envelope, signal);
   assertActive(signal);
-  setLocalRevision(revision);
-  localStorage.setItem(LAST_HASH_KEY, stableSnapshotString(payload));
   if (conflict) {
     // Preserve edits made while the browser storage request was in flight.
     const current = captureFullSnapshot({ compact: true });
     applyFullSnapshot(snapshotsDiffer(current, localPayload) ? mergeSnapshots(payload, current) : payload);
     dispatchMerge('浏览器同步存在并发修改，上传前已自动合并。', { revision });
   }
+  setLocalRevision(revision);
+  localStorage.setItem(LAST_HASH_KEY, stableSnapshotString(payload));
   window.dispatchEvent(new CustomEvent('navinocode:native-sync-success'));
   return { revision, conflict, payload };
-});
+}));
 
-export const pullNativeSnapshot = ({ signal } = {}) => enqueueSync(async () => {
+export const pullNativeSnapshot = ({ signal } = {}) => enqueueSync(() => observeSync('browser', 'browser', 'pull', async () => {
   assertActive(signal);
   if (!hasNativeSync()) throw new Error('请在 Edge/Chromium 扩展中使用浏览器同步');
   const remote = await readNativeEnvelope(signal);
@@ -179,8 +179,8 @@ export const pullNativeSnapshot = ({ signal } = {}) => enqueueSync(async () => {
     dispatchMerge('已合并浏览器账户中的配置与本地修改。', { revision: remote.revision });
   }
   window.dispatchEvent(new CustomEvent('navinocode:native-sync-success'));
-  return { found: true, changed, payload, revision: remote.revision };
-});
+  return { found: true, changed, payload, acknowledgedPayload: remote.payload, revision: remote.revision };
+}));
 
 export const enableNativeSync = async () => {
   if (!hasNativeSync()) throw new Error('当前环境不支持浏览器原生同步');
@@ -280,4 +280,13 @@ export const initializeNativeSync = () => {
     window.removeEventListener('navinocode:native-sync-setting', refresh);
     window.removeEventListener('storage', onPreferenceChanged);
   };
+};
+
+// Read-only endpoints for the diagnostics/preview UI. No local application or acknowledgement.
+export const readNativeSnapshot = () => enqueueSync(() => readNativeEnvelope());
+export const getNativeSyncUsage = async () => {
+  if (!hasNativeSync()) throw new Error('仅扩展模式支持浏览器同步配额');
+  const used = await invoke(chrome.storage.sync, 'getBytesInUse', null);
+  if (!Number.isFinite(used)) throw new Error('浏览器没有返回有效的同步用量');
+  return { used, limit: chrome.storage.sync.QUOTA_BYTES || 102400 };
 };

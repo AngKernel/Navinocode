@@ -1,3 +1,4 @@
+import OrganizationTools from './OrganizationTools';
 import React, { useEffect, useMemo, useState } from 'react';
 import { Copy, Folder, FolderPlus, Pencil, Plus, Trash2, Undo2 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
@@ -141,6 +142,7 @@ const WorkspaceManager = ({ open, onOpenChange, initialFolderId = '' }) => {
                 <Input aria-label="网站地址" placeholder="输入网址，例如 example.com" value={url} onChange={(event) => setUrl(event.target.value)} className="min-w-0 rounded-xl" />
                 <Button type="submit" disabled={!url.trim()} className="rounded-xl"><Plus className="mr-1 h-4 w-4" />添加网站</Button>
               </form>
+              <OrganizationTools workspaceId={workspace.id} selectedIds={[...selected]} onMoved={() => setSelected(new Set())} />
               <div className="mb-3 flex flex-wrap items-center gap-2">
                 <Input aria-label="筛选当前目录" placeholder="筛选当前目录；Ctrl/⌘+K 可搜索所有工作区" value={query} onChange={(event) => setQuery(event.target.value)} className="h-9 min-w-[150px] flex-1 rounded-xl" />
                 <select aria-label="批量移动网站" className={selectClass} value="" disabled={!selected.size} onChange={(event) => perform(() => {

@@ -14,7 +14,7 @@ import PomodoroTimer from '@/components/PomodoroTimer';
 import { recordUsageEvent } from '@/lib/usageEvents';
 import SyncControls from '@/advanced/SyncControls';
 import { useWorkspaceStore, useWorkspaceSetting, useRootApps } from '@/advanced/useWorkspaceStore';
-import { applyFullSnapshot, captureFullSnapshot, importFullSnapshot, restoreRecoveryPoint } from '@/advanced/storage';
+import { captureFullSnapshot, importFullSnapshot } from '@/advanced/storage';
 import { isComposingEvent } from '@/advanced/interactionUtils';
 import DraggableBottomBar from '@/components/DraggableBottomBar';
 import { Button } from '@/components/ui/button';
@@ -68,11 +68,24 @@ const Index = () => {
   const [isSyncing, setIsSyncing] = useState(false);
   const [lastSyncedAt, setLastSyncedAt] = useState(() => localStorage.getItem('lastSyncedAt') || '');
   const clientIdRef = useRef(getSupabaseClientId());
-  const [autoSyncEnabled, setAutoSyncEnabled] = useState(() => {
+  const [autoSyncEnabled, setAutoSyncEnabledState] = useState(() => {
     const saved = localStorage.getItem('autoSyncEnabled');
     return saved ? saved === 'true' : true;
   });
   const autoSyncTimerRef = useRef(null);
+  const setAutoSyncEnabled = (enabled) => {
+    localStorage.setItem('autoSyncEnabled', enabled ? 'true' : 'false');
+    setAutoSyncEnabledState(Boolean(enabled));
+    window.dispatchEvent(new CustomEvent('navinocode:cloud-sync-setting'));
+  };
+  useEffect(() => {
+    const refresh = () => setAutoSyncEnabledState(localStorage.getItem('autoSyncEnabled') !== 'false');
+    const onStorage = (event) => { if (event.key === null || event.key === 'autoSyncEnabled') refresh(); };
+    window.addEventListener('navinocode:cloud-sync-setting', refresh);
+    window.addEventListener('storage', onStorage);
+    return () => { window.removeEventListener('navinocode:cloud-sync-setting', refresh); window.removeEventListener('storage', onStorage); };
+  }, []);
+
   
   // 内置句子作为一言API失败时的备选
   const fallbackSentences = [
@@ -153,9 +166,6 @@ const Index = () => {
     persistSyncId(supabaseSyncId);
   }, [supabaseSyncId]);
 
-  useEffect(() => {
-    localStorage.setItem('autoSyncEnabled', autoSyncEnabled ? 'true' : 'false');
-  }, [autoSyncEnabled]);
 
   // 页面加载时自动聚焦到搜索框
   useEffect(() => {
@@ -169,6 +179,8 @@ const Index = () => {
     const handleKeyDown = (e) => {
       // 检查是否按下了空格键
       if (e.code === 'Space') {
+        const target = document.activeElement;
+        if (target !== searchInputRef.current && (target?.closest?.('button, a, input, textarea, select, [contenteditable], [role="dialog"], [role="alertdialog"]') || e.defaultPrevented)) return;
         // 如果当前没有输入框聚焦，则聚焦到搜索框
         if (document.activeElement.tagName !== 'INPUT') {
           e.preventDefault();
@@ -520,7 +532,9 @@ const Index = () => {
     if (!autoSyncEnabled || !supabaseConfig.url || !supabaseConfig.anonKey || !hasSyncId) {
       return;
     }
-    handlePullFromCloud({ silent: true });
+    const controller = new AbortController();
+    handlePullFromCloud({ silent: true, signal: controller.signal });
+    return () => controller.abort();
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [supabaseConfig.url, supabaseConfig.anonKey, supabaseSyncId, autoSyncEnabled]);
 
@@ -532,11 +546,14 @@ const Index = () => {
     if (!autoSyncEnabled || !supabaseConfig.url || !supabaseConfig.anonKey || !hasSyncId) {
       return;
     }
+    const controller = new AbortController();
     autoSyncTimerRef.current = setTimeout(() => {
-      handlePushToCloud({ silent: true });
+      if (localStorage.getItem('autoSyncEnabled') === 'false') return;
+      handlePushToCloud({ silent: true, signal: controller.signal });
     }, 1500);
 
     return () => {
+      controller.abort();
       if (autoSyncTimerRef.current) {
         clearTimeout(autoSyncTimerRef.current);
       }
@@ -560,7 +577,6 @@ const Index = () => {
     autoSyncEnabled
   ]);
 
-  const applyCloudPayload = (payload) => applyFullSnapshot(payload);
 
   const handleSaveSupabaseConfig = () => {
     persistSupabaseConfig(supabaseConfig);
@@ -579,12 +595,11 @@ const Index = () => {
     }
     setIsSyncing(true);
     try {
-      const { payload, updatedAt } = await pullCloudState(supabaseConfig, undefined, syncId);
+      const { payload, updatedAt } = await pullCloudState(supabaseConfig, undefined, syncId, { signal: options.signal });
       if (!payload) {
         if (!options.silent) toast('云端暂无数据，可先上传本地数据');
         return;
       }
-      applyCloudPayload(payload);
       if (updatedAt) {
         setLastSyncedAt(updatedAt);
         localStorage.setItem('lastSyncedAt', updatedAt);
@@ -611,7 +626,7 @@ const Index = () => {
     setIsSyncing(true);
     try {
       const payload = captureFullSnapshot();
-      await pushCloudState(supabaseConfig, payload, undefined, syncId);
+      await pushCloudState(supabaseConfig, payload, undefined, syncId, { signal: options.signal });
       const now = new Date().toISOString();
       setLastSyncedAt(now);
       localStorage.setItem('lastSyncedAt', now);
@@ -1094,7 +1109,7 @@ const Index = () => {
                 <Card className="mt-2 rounded-2xl">
                   <CardContent className="p-4">
                     <p className="mb-3 text-xs leading-relaxed text-gray-600 dark:text-gray-400">
-                      导出全部工作区、文件夹、网站、待办和布局；不包含同步凭据。导入前会保存一个本地恢复点。
+                      导出全部工作区、文件夹、网站、待办和布局；不包含同步凭据。导入前会保存到多版本恢复历史；恢复与差异预览见下方。
                     </p>
                     <div className="flex flex-wrap gap-2">
                       <Button type="button" variant="secondary" className="rounded-2xl" onClick={handleExportConfig}>
@@ -1103,10 +1118,7 @@ const Index = () => {
                       <Button type="button" variant="outline" className="rounded-2xl" onClick={() => importConfigRef.current?.click()}>
                         <Upload className="mr-2 h-4 w-4" />导入配置
                       </Button>
-                      <Button type="button" variant="outline" className="rounded-2xl" onClick={() => {
-                        if (!window.confirm('用上一个恢复点替换当前工作区？当前配置也会保留为新的恢复点。')) return;
-                        try { restoreRecoveryPoint(); toast('恢复点已还原'); } catch (error) { toast.error(error.message); }
-                      }}>恢复上次配置</Button>
+
                       <input ref={importConfigRef} type="file" accept="application/json,.json" className="hidden" onChange={handleImportConfig} />
                     </div>
                   </CardContent>
@@ -1114,11 +1126,11 @@ const Index = () => {
               </div>
 
               <div className={settingsSection === 'data' ? 'mt-6 rounded-2xl border p-4' : 'hidden'}>
-                <SyncControls />
+                <SyncControls cloudConfig={supabaseConfig} syncId={supabaseSyncId} autoSyncEnabled={autoSyncEnabled} onAutoSyncChange={setAutoSyncEnabled} />
               </div>
               {/* 云同步 */}
               <div className={settingsSection === 'data' ? 'mt-6' : 'hidden'}>
-                <Label className="text-sm font-medium">云同步（Supabase 直连）</Label>
+                <Label className="text-sm font-medium">Supabase 连接配置（编辑会暂停自动同步）</Label>
                 <Card className="mt-2 rounded-2xl overflow-hidden">
                   <CardContent className="p-4 space-y-3">
                     <div className="grid gap-2">
@@ -1127,20 +1139,20 @@ const Index = () => {
                         inputMode="url"
                         placeholder="Supabase 项目 URL，如 https://xxx.supabase.co"
                         value={supabaseUrl}
-                        onChange={(e) => setSupabaseUrl(e.target.value)}
+                        onChange={(e) => { setAutoSyncEnabled(false); setSupabaseUrl(e.target.value); }}
                         className="rounded-2xl"
                       />
                       <Input
                         type="password"
                         placeholder="Supabase anon key"
                         value={supabaseAnonKey}
-                        onChange={(e) => setSupabaseAnonKey(e.target.value)}
+                        onChange={(e) => { setAutoSyncEnabled(false); setSupabaseAnonKey(e.target.value); }}
                         className="rounded-2xl"
                       />
                       <Input
                         placeholder="同步 ID（多个设备填同一个字符串即可共享数据）"
                         value={supabaseSyncId}
-                        onChange={(e) => setSupabaseSyncId(e.target.value)}
+                        onChange={(e) => { setAutoSyncEnabled(false); setSupabaseSyncId(e.target.value); }}
                         className="rounded-2xl"
                       />
                     </div>
@@ -1160,36 +1172,8 @@ const Index = () => {
                       >
                         保存配置
                       </Button>
-                      <Button
-                        variant={autoSyncEnabled ? "secondary" : "outline"}
-                        className="rounded-2xl"
-                        onClick={() => setAutoSyncEnabled(!autoSyncEnabled)}
-                      >
-                        {autoSyncEnabled ? '自动同步：开' : '自动同步：关'}
-                      </Button>
-                      <Button
-                        variant="outline"
-                        className="rounded-2xl"
-                        onClick={handlePullFromCloud}
-                        disabled={isSyncing}
-                      >
-                        <RefreshCcw className="h-4 w-4 mr-2" />
-                        从云端拉取
-                      </Button>
-                      <Button
-                        className="rounded-2xl"
-                        onClick={handlePushToCloud}
-                        disabled={isSyncing}
-                      >
-                        <Upload className="h-4 w-4 mr-2" />
-                        上传本地数据
-                      </Button>
                     </div>
-                    {lastSyncedAt && (
-                      <p className="text-xs text-gray-500 dark:text-gray-400">
-                        上次同步：{new Date(lastSyncedAt).toLocaleString('zh-CN')}
-                      </p>
-                    )}
+
                   </CardContent>
                 </Card>
               </div>

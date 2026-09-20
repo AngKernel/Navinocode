@@ -1,3 +1,6 @@
+import { saveRecoveryRecord, findRecoveryRecord } from './recoveryHistory.js';
+import { assertPreviewCurrent, previewSignature } from './snapshotDiff.js';
+import { previewTransfer, transferIntoDraft, previewBookmarkImport, importIntoDraft } from './organization.js';
 import { DEFAULT_APPS, shouldMigrateDefaultApps } from './defaultApps.js';
 import {
   SCHEMA_VERSION, DEFAULT_SETTINGS, array, clone, entityKey, getActiveWorkspace, getRootApps,
@@ -291,29 +294,56 @@ export const applyFullSnapshot = (snapshot, { selectWorkspace = false } = {}) =>
     ws.settings = normalizeSettings(snapshot, ws.settings);
     if (snapshot.apps) ws.apps = [...snapshot.apps.map((app) => ({ ...app, folderId: null })), ...ws.apps.filter((app) => app.folderId)];
   }
-  if (JSON.stringify(next) !== JSON.stringify(current)) saveRecoveryPoint('同步应用前');
+  if (previewSignature(next) !== previewSignature(current)) saveRecoveryPoint('同步应用前');
   const saved = saveAdvancedState(next, { preserveUpdatedAt: true });
   window.dispatchEvent(new CustomEvent('navinocode:snapshot-applied'));
   return saved;
 };
-export const saveRecoveryPoint = (reason) => {
-  const record = { reason, createdAt: new Date().toISOString(), state: loadAdvancedState() };
-  localStorage.setItem(RECOVERY_KEY, JSON.stringify(record));
-  return record;
-};
-export const getRecoveryPoint = () => parseJSON(localStorage.getItem(RECOVERY_KEY), null);
-export const restoreRecoveryPoint = () => {
-  const point = getRecoveryPoint();
-  if (!point?.state) throw new Error('暂无恢复点');
+export const saveRecoveryPoint = (reason) => saveRecoveryRecord(loadAdvancedState(), reason);
+export const getRecoveryPoint = (id) => findRecoveryRecord(id);
+export const restoreRecoveryPoint = (id, { expectedSignature } = {}) => {
+  const point = getRecoveryPoint(id);
+  if (!point?.state) throw new Error('恢复点已不存在');
   validateFullSnapshot({ advancedState: point.state });
-  const previous = clone(loadAdvancedState());
+  const prepared = normalizeState(point.state);
+  const current = captureFullSnapshot();
+  if (expectedSignature !== undefined) assertPreviewCurrent(expectedSignature, current);
+  const signature = previewSignature(current);
   saveRecoveryPoint('恢复前');
   return mutate((state, at) => {
-    previous.workspaces.forEach((ws) => { state.tombstones.workspaces[ws.id] = at; });
-    state.workspaces = normalizeState(point.state).workspaces.map((ws) => copyWorkspace(ws, ws.name, at));
-    state.activeWorkspaceId = state.workspaces[0].id;
+    assertPreviewCurrent(signature, captureFullSnapshot());
+    state.workspaces.forEach((ws) => { state.tombstones.workspaces[ws.id] = at; });
+    state.workspaces = prepared.workspaces.map((ws) => copyWorkspace(ws, ws.name, at));
+    const index = prepared.workspaces.findIndex((ws) => ws.id === prepared.activeWorkspaceId);
+    state.activeWorkspaceId = state.workspaces[Math.max(0, index)].id;
   });
 };
+
+export const moveAppsAcrossWorkspaces = (sourceId, ids, targetId, folderId = null, { duplicatePolicy = 'skip', expectedSignature } = {}) => {
+  const current = loadAdvancedState();
+  if (expectedSignature !== undefined) assertPreviewCurrent(expectedSignature, current);
+  const signature = previewSignature(current);
+  const plan = previewTransfer(current, sourceId, ids, targetId, folderId, duplicatePolicy);
+  if (!plan.moving.length) return { moved: 0, skipped: plan.skipped.length };
+  saveRecoveryPoint('跨工作区移动前');
+  mutate((state, at) => {
+    assertPreviewCurrent(signature, state);
+    transferIntoDraft(state, at, sourceId, ids, targetId, folderId, duplicatePolicy);
+  });
+  return { moved: plan.moving.length, skipped: plan.skipped.length };
+};
+export const importBookmarkRows = (workspaceId, rows, { expectedSignature, ...options } = {}) => {
+  const current = loadAdvancedState();
+  if (expectedSignature !== undefined) assertPreviewCurrent(expectedSignature, current);
+  const signature = previewSignature(current);
+  const preview = previewBookmarkImport(current, workspaceId, rows, options);
+  if (!preview.some((row) => row.status === 'new')) return { imported: 0, skipped: preview.length };
+  saveRecoveryPoint('书签导入前');
+  let result;
+  mutate((state, at) => { assertPreviewCurrent(signature, state); result = importIntoDraft(state, at, workspaceId, rows, options); });
+  return result;
+};
+
 export const importFullSnapshot = (snapshot) => {
   validateFullSnapshot(snapshot);
   // Prepare everything before either the backup or canonical state is written.
