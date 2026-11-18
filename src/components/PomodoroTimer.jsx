@@ -3,22 +3,22 @@ import { Settings } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
 import { Input } from '@/components/ui/input';
+import { useWorkspaceSetting } from '@/advanced/useWorkspaceStore';
+import { parseTimerMinutes } from '@/advanced/interactionUtils';
 
 // 番茄钟小组件（Apple Design风格 + 玻璃材质卡片）
 const PomodoroTimer = () => {
   // 可配置总时长（分钟）
-  const [minutesSetting, setMinutesSetting] = useState(() => {
-    const m = parseInt(localStorage.getItem('pomodoro_minutes') || '25', 10);
-    return Number.isFinite(m) && m > 0 ? m : 25;
-  });
+  const [minutesSetting, setMinutesSetting] = useWorkspaceSetting('pomodoroMinutes');
   const [remaining, setRemaining] = useState(() => minutesSetting * 60);
   const [running, setRunning] = useState(false);
   const intervalRef = useRef(null);
 
-  // 持久化设置
   useEffect(() => {
-    localStorage.setItem('pomodoro_minutes', String(minutesSetting));
+    setRemaining(minutesSetting * 60);
+    setRunning(false);
   }, [minutesSetting]);
+  useEffect(() => { if (remaining === 0) setRunning(false); }, [remaining]);
 
   useEffect(() => {
     if (!running) return;
@@ -42,7 +42,7 @@ const PomodoroTimer = () => {
     setRemaining(minutesSetting * 60);
   };
 
-  const toggle = () => setRunning((v) => !v);
+  const toggle = () => { if (!remaining) setRemaining(minutesSetting * 60); setRunning((v) => !v); };
 
   const formatted = useMemo(() => {
     const m = Math.floor(remaining / 60).toString().padStart(2, '0');
@@ -51,8 +51,8 @@ const PomodoroTimer = () => {
   }, [remaining]);
 
   const applyMinutes = (v) => {
-    const n = parseInt(v, 10);
-    if (Number.isFinite(n) && n > 0 && n <= 180) {
+    const n = parseTimerMinutes(v);
+    if (n !== null) {
       setMinutesSetting(n);
       setRemaining(n * 60);
       setRunning(false);

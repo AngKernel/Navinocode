@@ -1,20 +1,25 @@
+import SessionManager from './SessionManager';
 import React, { useEffect, useState } from 'react';
-import { Command, LayoutGrid } from 'lucide-react';
+import { Command, LayoutGrid, PanelsTopLeft } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { toast } from 'sonner';
 import CommandCenter from './CommandCenter';
 import WorkspaceManager from './WorkspaceManager';
 import WorkspaceSwitcher from './WorkspaceSwitcher';
 import WorkspaceHomeFolders from './WorkspaceHomeFolders';
-import SyncControls from './SyncControls';
 import { initializeNativeSync } from './nativeSync';
-import { migrateStoredAppIcons } from '@/lib/siteIcons';
-
-const iconMigration = migrateStoredAppIcons();
 
 const AdvancedFeatures = () => {
   const [commandOpen, setCommandOpen] = useState(false);
   const [workspaceOpen, setWorkspaceOpen] = useState(false);
+  const [initialFolderId, setInitialFolderId] = useState('');
+  const [sessionOpen, setSessionOpen] = useState(false);
+
+  useEffect(() => {
+    const openLibrary = (event) => { setInitialFolderId(event.detail?.folderId || ''); setWorkspaceOpen(true); };
+    window.addEventListener('navinocode:open-library', openLibrary);
+    return () => window.removeEventListener('navinocode:open-library', openLibrary);
+  }, []);
 
   useEffect(() => {
     const onKeyDown = (event) => {
@@ -30,14 +35,8 @@ const AdvancedFeatures = () => {
   useEffect(() => initializeNativeSync(), []);
 
   useEffect(() => {
-    if (iconMigration.migrated > 0) {
-      toast(`已修复 ${iconMigration.migrated} 个旧版网站图标`);
-    }
-  }, []);
-
-  useEffect(() => {
     const onConflict = (event) => toast(event.detail?.message || '同步冲突已自动合并');
-    const onNativeApplied = () => toast('浏览器账户有新配置，重新打开新标签页后完全生效');
+    const onNativeApplied = () => toast('浏览器账户配置已更新并立即生效');
     window.addEventListener('navinocode:sync-conflict', onConflict);
     window.addEventListener('navinocode:native-sync-applied', onNativeApplied);
     return () => {
@@ -48,7 +47,7 @@ const AdvancedFeatures = () => {
 
   return (
     <>
-      <div className="fixed left-6 top-6 z-20 flex max-w-[calc(100vw-3rem)] items-center gap-2">
+      <div className="fixed left-4 top-6 sm:left-6 z-20 flex max-w-[calc(100vw-6rem)] items-center gap-2">
         <Button
           type="button"
           variant="outline"
@@ -67,18 +66,23 @@ const AdvancedFeatures = () => {
           type="button"
           variant="outline"
           size="icon"
-          aria-label="管理工作空间"
-          title="工作空间、文件夹与同步"
-          onClick={() => setWorkspaceOpen(true)}
+          aria-label="整理网站"
+          title="整理网站：工作区与文件夹"
+          onClick={() => { setInitialFolderId(''); setWorkspaceOpen(true); }}
           className="h-10 w-10 shrink-0 rounded-full opacity-80 backdrop-blur-md transition-opacity hover:opacity-100"
         >
           <LayoutGrid className="h-5 w-5" />
         </Button>
+        <Button type="button" variant="outline" size="icon" aria-label="打开工作会话" title="保存和恢复标签页会话"
+          onClick={() => setSessionOpen(true)} className="h-10 w-10 shrink-0 rounded-full opacity-80 backdrop-blur-md transition-opacity hover:opacity-100">
+          <PanelsTopLeft className="h-5 w-5" />
+        </Button>
       </div>
 
+      <SessionManager open={sessionOpen} onOpenChange={setSessionOpen} />
       <WorkspaceHomeFolders />
       <CommandCenter open={commandOpen} onOpenChange={setCommandOpen} />
-      <WorkspaceManager open={workspaceOpen} onOpenChange={setWorkspaceOpen} footer={<SyncControls />} />
+      <WorkspaceManager open={workspaceOpen} onOpenChange={setWorkspaceOpen} initialFolderId={initialFolderId} />
     </>
   );
 };

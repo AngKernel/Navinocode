@@ -12,7 +12,10 @@ import { Input } from '@/components/ui/input';
 import { Download, Globe, Search, X, Upload, Settings, RefreshCcw } from 'lucide-react';
 import PomodoroTimer from '@/components/PomodoroTimer';
 import { recordUsageEvent } from '@/lib/usageEvents';
-import AppSelector from '@/components/AppSelector';
+import SyncControls from '@/advanced/SyncControls';
+import { useWorkspaceStore, useWorkspaceSetting, useRootApps } from '@/advanced/useWorkspaceStore';
+import { captureFullSnapshot, importFullSnapshot } from '@/advanced/storage';
+import { isComposingEvent } from '@/advanced/interactionUtils';
 import DraggableBottomBar from '@/components/DraggableBottomBar';
 import { Button } from '@/components/ui/button';
 import { useGitHubStars } from '@/components/useGitHubStars';
@@ -20,89 +23,9 @@ import { toast } from 'sonner';
 import { getStoredSupabaseConfig, getSupabaseClientId, getStoredSyncId, persistSupabaseConfig, persistSyncId } from '@/integrations/supabase/client';
 import { pullCloudState, pushCloudState } from '@/lib/cloudSync';
 
-const logoUrl = (domain) => `https://www.google.com/s2/favicons?domain=${domain}&sz=128`;
-const localSvg = (name) => `/svgs/${name}.svg`;
-
-const DEFAULT_APPS = [
-  { id: 1, name: 'GitHub', url: 'https://github.com', icon: localSvg('github') },
-  { id: 2, name: 'bilibili', url: 'https://www.bilibili.com', icon: localSvg('bilibili') },
-  { id: 3, name: 'Blog', url: 'https://lover.nyc.mn', icon: '/icons/blog.png' },
-  { id: 4, name: 'Gmail', url: 'https://mail.google.com', icon: localSvg('gmail') },
-  { id: 5, name: 'Qwen', url: 'https://chat.qwen.ai/', icon: localSvg('qwen') },
-  { id: 6, name: 'Z.ai', url: 'https://chat.z.ai/', icon: localSvg('zai') },
-  { id: 7, name: 'DeepSeek', url: 'https://chat.deepseek.com/', icon: localSvg('deepseek') },
-  { id: 8, name: '豆包', url: 'https://www.doubao.com/chat/', icon: localSvg('doubao') },
-];
-
-const LEGACY_DEFAULT_APPS = [
-  { name: 'Gmail', url: 'https://mail.google.com', icon: 'gmail' },
-  { name: 'YouTube', url: 'https://www.youtube.com', icon: 'youtube' },
-  { name: 'GitHub', url: 'https://github.com', icon: 'github' },
-  { name: 'Twitter', url: 'https://twitter.com', icon: 'twitter' },
-  { name: 'Facebook', url: 'https://facebook.com', icon: 'facebook' },
-  { name: 'Instagram', url: 'https://instagram.com', icon: 'instagram' },
-  { name: 'LinkedIn', url: 'https://linkedin.com', icon: 'linkedin' },
-  { name: 'Reddit', url: 'https://reddit.com', icon: 'reddit' },
-];
-
-const PREVIOUS_DEFAULT_APPS = [
-  { name: 'GitHub', url: 'https://github.com', icon: logoUrl('github.com') },
-  { name: 'bilibili', url: 'https://www.bilibili.com', icon: logoUrl('bilibili.com') },
-  { name: 'Blog', url: 'https://lover.nyc.mn', icon: logoUrl('lover.nyc.mn') },
-  { name: 'Gmail', url: 'https://mail.google.com', icon: logoUrl('mail.google.com') },
-  { name: 'Qwen', url: 'https://chat.qwen.ai/', icon: logoUrl('chat.qwen.ai') },
-  { name: 'Z.ai', url: 'https://chat.z.ai/', icon: logoUrl('chat.z.ai') },
-];
-
-const INTERMEDIATE_DEFAULT_APPS = [
-  { name: 'GitHub', url: 'https://github.com', icon: localSvg('github') },
-  { name: 'bilibili', url: 'https://www.bilibili.com', icon: localSvg('bilibili') },
-  { name: 'Blog', url: 'https://lover.nyc.mn', icon: logoUrl('lover.nyc.mn') },
-  { name: 'Gmail', url: 'https://mail.google.com', icon: logoUrl('mail.google.com') },
-  { name: 'Qwen', url: 'https://chat.qwen.ai/', icon: localSvg('qwen') },
-  { name: 'Z.ai', url: 'https://chat.z.ai/', icon: localSvg('zai') },
-  { name: 'DeepSeek', url: 'https://chat.deepseek.com/', icon: localSvg('deepseek') },
-];
-
-const PRE_DOUBAO_DEFAULT_APPS = [
-  { name: 'GitHub', url: 'https://github.com', icon: localSvg('github') },
-  { name: 'bilibili', url: 'https://www.bilibili.com', icon: localSvg('bilibili') },
-  { name: 'Blog', url: 'https://lover.nyc.mn', icon: '/icons/blog.png' },
-  { name: 'Gmail', url: 'https://mail.google.com', icon: logoUrl('mail.google.com') },
-  { name: 'Qwen', url: 'https://chat.qwen.ai/', icon: localSvg('qwen') },
-  { name: 'Z.ai', url: 'https://chat.z.ai/', icon: localSvg('zai') },
-  { name: 'DeepSeek', url: 'https://chat.deepseek.com/', icon: localSvg('deepseek') },
-];
-
-const PRE_GMAIL_SVG_DEFAULT_APPS = [
-  { name: 'GitHub', url: 'https://github.com', icon: localSvg('github') },
-  { name: 'bilibili', url: 'https://www.bilibili.com', icon: localSvg('bilibili') },
-  { name: 'Blog', url: 'https://lover.nyc.mn', icon: '/icons/blog.png' },
-  { name: 'Gmail', url: 'https://mail.google.com', icon: logoUrl('mail.google.com') },
-  { name: 'Qwen', url: 'https://chat.qwen.ai/', icon: localSvg('qwen') },
-  { name: 'Z.ai', url: 'https://chat.z.ai/', icon: localSvg('zai') },
-  { name: 'DeepSeek', url: 'https://chat.deepseek.com/', icon: localSvg('deepseek') },
-  { name: '豆包', url: 'https://www.doubao.com/chat/', icon: localSvg('doubao') },
-];
-
-const isMatchingDefaultApps = (apps, defaults) => (
-  Array.isArray(apps) &&
-  apps.length === defaults.length &&
-  apps.every((app, index) => {
-    const item = defaults[index];
-    return app?.name === item.name && app?.url === item.url && app?.icon === item.icon;
-  })
-);
-
-const shouldMigrateDefaultApps = (apps) => (
-  isMatchingDefaultApps(apps, LEGACY_DEFAULT_APPS) ||
-  isMatchingDefaultApps(apps, PREVIOUS_DEFAULT_APPS) ||
-  isMatchingDefaultApps(apps, INTERMEDIATE_DEFAULT_APPS) ||
-  isMatchingDefaultApps(apps, PRE_DOUBAO_DEFAULT_APPS) ||
-  isMatchingDefaultApps(apps, PRE_GMAIL_SVG_DEFAULT_APPS)
-);
-
 const Index = () => {
+  const workspaceState = useWorkspaceStore();
+  const workspaceId = workspaceState.activeWorkspaceId;
   const { stars, loading: starsLoading, error: starsError } = useGitHubStars();
   const [searchValue, setSearchValue] = useState('');
   const SEARCH_HISTORY_KEY = 'searchHistory';
@@ -116,61 +39,24 @@ const Index = () => {
     }
   });
   const [bingSuggestions, setBingSuggestions] = useState([]);
-  const [onlineSuggestionsEnabled, setOnlineSuggestionsEnabled] = useState(
-    () => localStorage.getItem('onlineSuggestionsEnabled') === 'true'
-  );
+  const [onlineSuggestionsEnabled, setOnlineSuggestionsEnabled] = useWorkspaceSetting('onlineSuggestionsEnabled');
   const [isSuggestOpen, setIsSuggestOpen] = useState(false);
   const [isSuggestLoading, setIsSuggestLoading] = useState(false);
   const [activeSuggestIndex, setActiveSuggestIndex] = useState(-1);
   const [currentTime, setCurrentTime] = useState(new Date());
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [settingsSection, setSettingsSection] = useState('general');
-  const [themeMode, setThemeMode] = useState(() => localStorage.getItem('themeMode') || 'system');
+  const [themeMode, setThemeMode] = useWorkspaceSetting('themeMode');
   const importConfigRef = useRef(null);
-  const [backgroundImage, setBackgroundImage] = useState(() => {
-    // 从localStorage读取背景图片
-    return localStorage.getItem('backgroundImage') || '';
-  });
-  const [backgroundBrightness, setBackgroundBrightness] = useState(() => {
-    // 从localStorage读取亮度设置
-    return parseInt(localStorage.getItem('backgroundBrightness')) || 100;
-  });
-  const [backgroundBlur, setBackgroundBlur] = useState(() => {
-    // 从localStorage读取模糊设置
-    return parseInt(localStorage.getItem('backgroundBlur')) || 0;
-  });
-  const [backgroundOverlay, setBackgroundOverlay] = useState(() => {
-    const saved = parseInt(localStorage.getItem('backgroundOverlay'), 10);
-    return Number.isFinite(saved) ? saved : 24;
-  });
+  const [backgroundImage, setBackgroundImage] = useWorkspaceSetting('backgroundImage');
+  const [backgroundBrightness, setBackgroundBrightness] = useWorkspaceSetting('backgroundBrightness');
+  const [backgroundBlur, setBackgroundBlur] = useWorkspaceSetting('backgroundBlur');
+  const [backgroundOverlay, setBackgroundOverlay] = useWorkspaceSetting('backgroundOverlay');
   const [isSearchFocused, setIsSearchFocused] = useState(false);
   const [isEngineMenuOpen, setIsEngineMenuOpen] = useState(false);
-  const [apps, setApps] = useState(() => {
-    try {
-      const saved = localStorage.getItem('apps');
-      if (saved) {
-        const parsed = JSON.parse(saved);
-        if (shouldMigrateDefaultApps(parsed)) {
-          try {
-            localStorage.setItem('bottomCount', String(DEFAULT_APPS.length));
-          } catch {}
-          return DEFAULT_APPS;
-        }
-        if (Array.isArray(parsed) && parsed.length) return parsed;
-      }
-    } catch {}
-    return DEFAULT_APPS;
-  });
-  const [searchEngine, setSearchEngine] = useState(() => {
-    // 从localStorage读取搜索引擎设置
-    return localStorage.getItem('searchEngine') || 'bing';
-  });
-  const [todos, setTodos] = useState(() => {
-    const savedTodos = localStorage.getItem('todos');
-    return savedTodos ? JSON.parse(savedTodos) : [
-      { id: 1, text: 'Hello World', completed: false }
-    ];
-  });
+  const [apps, setApps] = useRootApps();
+  const [searchEngine, setSearchEngine] = useWorkspaceSetting('searchEngine');
+  const [todos, setTodos] = useWorkspaceSetting('todos');
   const [hitokoto, setHitokoto] = useState('正在加载一言...');
   // 背景直链输入与校验状态
   const [bgUrlInput, setBgUrlInput] = useState('');
@@ -182,11 +68,24 @@ const Index = () => {
   const [isSyncing, setIsSyncing] = useState(false);
   const [lastSyncedAt, setLastSyncedAt] = useState(() => localStorage.getItem('lastSyncedAt') || '');
   const clientIdRef = useRef(getSupabaseClientId());
-  const [autoSyncEnabled, setAutoSyncEnabled] = useState(() => {
+  const [autoSyncEnabled, setAutoSyncEnabledState] = useState(() => {
     const saved = localStorage.getItem('autoSyncEnabled');
     return saved ? saved === 'true' : true;
   });
   const autoSyncTimerRef = useRef(null);
+  const setAutoSyncEnabled = (enabled) => {
+    localStorage.setItem('autoSyncEnabled', enabled ? 'true' : 'false');
+    setAutoSyncEnabledState(Boolean(enabled));
+    window.dispatchEvent(new CustomEvent('navinocode:cloud-sync-setting'));
+  };
+  useEffect(() => {
+    const refresh = () => setAutoSyncEnabledState(localStorage.getItem('autoSyncEnabled') !== 'false');
+    const onStorage = (event) => { if (event.key === null || event.key === 'autoSyncEnabled') refresh(); };
+    window.addEventListener('navinocode:cloud-sync-setting', refresh);
+    window.addEventListener('storage', onStorage);
+    return () => { window.removeEventListener('navinocode:cloud-sync-setting', refresh); window.removeEventListener('storage', onStorage); };
+  }, []);
+
   
   // 内置句子作为一言API失败时的备选
   const fallbackSentences = [
@@ -202,15 +101,7 @@ const Index = () => {
     'Your personal start page'
   ];
   
-  const [componentSettings, setComponentSettings] = useState(() => {
-    // 从localStorage读取组件设置
-    const saved = localStorage.getItem('componentSettings');
-    return saved ? JSON.parse(saved) : {
-      pomodoro: false,
-      heatmap: false,
-      todo: false
-    };
-  });
+  const [componentSettings, setComponentSettings] = useWorkspaceSetting('componentSettings');
 
   // 搜索框引用
   const searchInputRef = useRef(null);
@@ -230,6 +121,8 @@ const Index = () => {
   const suggestionJsonpCleanupRef = useRef(null);
   const suggestionRequestIdRef = useRef(0);
 
+  useEffect(() => { setIsSuggestOpen(false); setActiveSuggestIndex(-1); }, [workspaceId]);
+
   // 实时更新时间
   useEffect(() => {
     const timer = setInterval(() => {
@@ -247,7 +140,6 @@ const Index = () => {
       document.documentElement.style.colorScheme = isDark ? 'dark' : 'light';
     };
 
-    localStorage.setItem('themeMode', themeMode);
     applyTheme();
     media.addEventListener?.('change', applyTheme);
     return () => media.removeEventListener?.('change', applyTheme);
@@ -270,59 +162,10 @@ const Index = () => {
     fetchHitokoto();
   }, []);
 
-  // 持久化背景设置
-  useEffect(() => {
-    if (backgroundImage) {
-      localStorage.setItem('backgroundImage', backgroundImage);
-    } else {
-      localStorage.removeItem('backgroundImage');
-    }
-  }, [backgroundImage]);
-
-  useEffect(() => {
-    localStorage.setItem('backgroundBrightness', backgroundBrightness.toString());
-  }, [backgroundBrightness]);
-
-  useEffect(() => {
-    localStorage.setItem('backgroundBlur', backgroundBlur.toString());
-  }, [backgroundBlur]);
-
-  useEffect(() => {
-    localStorage.setItem('backgroundOverlay', backgroundOverlay.toString());
-  }, [backgroundOverlay]);
-
-  // 持久化搜索引擎设置
-  useEffect(() => {
-    localStorage.setItem('searchEngine', searchEngine);
-  }, [searchEngine]);
-
-  useEffect(() => {
-    localStorage.setItem('onlineSuggestionsEnabled', onlineSuggestionsEnabled ? 'true' : 'false');
-  }, [onlineSuggestionsEnabled]);
-
-  // 持久化组件设置
-  useEffect(() => {
-    localStorage.setItem('componentSettings', JSON.stringify(componentSettings));
-  }, [componentSettings]);
-
   useEffect(() => {
     persistSyncId(supabaseSyncId);
   }, [supabaseSyncId]);
 
-  useEffect(() => {
-    localStorage.setItem('autoSyncEnabled', autoSyncEnabled ? 'true' : 'false');
-  }, [autoSyncEnabled]);
-
-  // 持久化应用顺序
-  useEffect(() => {
-    try {
-      localStorage.setItem('apps', JSON.stringify(apps));
-    } catch {}
-  }, [apps]);
-
-  useEffect(() => {
-    localStorage.setItem('todos', JSON.stringify(todos));
-  }, [todos]);
 
   // 页面加载时自动聚焦到搜索框
   useEffect(() => {
@@ -336,6 +179,8 @@ const Index = () => {
     const handleKeyDown = (e) => {
       // 检查是否按下了空格键
       if (e.code === 'Space') {
+        const target = document.activeElement;
+        if (target !== searchInputRef.current && (target?.closest?.('button, a, input, textarea, select, [contenteditable], [role="dialog"], [role="alertdialog"]') || e.defaultPrevented)) return;
         // 如果当前没有输入框聚焦，则聚焦到搜索框
         if (document.activeElement.tagName !== 'INPUT') {
           e.preventDefault();
@@ -596,7 +441,6 @@ const Index = () => {
   // 清除背景图片
   const clearBackground = () => {
     setBackgroundImage('');
-    localStorage.removeItem('backgroundImage');
   };
 
   // 应用图片直链为背景
@@ -688,7 +532,9 @@ const Index = () => {
     if (!autoSyncEnabled || !supabaseConfig.url || !supabaseConfig.anonKey || !hasSyncId) {
       return;
     }
-    handlePullFromCloud({ silent: true });
+    const controller = new AbortController();
+    handlePullFromCloud({ silent: true, signal: controller.signal });
+    return () => controller.abort();
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [supabaseConfig.url, supabaseConfig.anonKey, supabaseSyncId, autoSyncEnabled]);
 
@@ -700,17 +546,21 @@ const Index = () => {
     if (!autoSyncEnabled || !supabaseConfig.url || !supabaseConfig.anonKey || !hasSyncId) {
       return;
     }
+    const controller = new AbortController();
     autoSyncTimerRef.current = setTimeout(() => {
-      handlePushToCloud({ silent: true });
+      if (localStorage.getItem('autoSyncEnabled') === 'false') return;
+      handlePushToCloud({ silent: true, signal: controller.signal });
     }, 1500);
 
     return () => {
+      controller.abort();
       if (autoSyncTimerRef.current) {
         clearTimeout(autoSyncTimerRef.current);
       }
     };
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [
+    workspaceState.updatedAt,
     apps,
     todos,
     componentSettings,
@@ -727,32 +577,6 @@ const Index = () => {
     autoSyncEnabled
   ]);
 
-  const applyCloudPayload = (payload) => {
-    if (Array.isArray(payload.apps)) setApps(payload.apps);
-    if (Array.isArray(payload.todos)) setTodos(payload.todos);
-    if (payload.componentSettings) setComponentSettings(payload.componentSettings);
-    if (typeof payload.searchEngine === 'string') setSearchEngine(payload.searchEngine);
-    if (typeof payload.onlineSuggestionsEnabled === 'boolean') {
-      setOnlineSuggestionsEnabled(payload.onlineSuggestionsEnabled);
-    }
-    if (typeof payload.backgroundBrightness === 'number') {
-      setBackgroundBrightness(payload.backgroundBrightness);
-    }
-    if (typeof payload.backgroundBlur === 'number') {
-      setBackgroundBlur(payload.backgroundBlur);
-    }
-    if (typeof payload.backgroundOverlay === 'number') {
-      setBackgroundOverlay(Math.max(0, Math.min(60, payload.backgroundOverlay)));
-    }
-    if (['system', 'light', 'dark'].includes(payload.themeMode)) {
-      setThemeMode(payload.themeMode);
-    }
-    if (payload.backgroundImage === null) {
-      setBackgroundImage('');
-    } else if (typeof payload.backgroundImage === 'string') {
-      setBackgroundImage(payload.backgroundImage);
-    }
-  };
 
   const handleSaveSupabaseConfig = () => {
     persistSupabaseConfig(supabaseConfig);
@@ -771,12 +595,11 @@ const Index = () => {
     }
     setIsSyncing(true);
     try {
-      const { payload, updatedAt } = await pullCloudState(supabaseConfig, undefined, syncId);
+      const { payload, updatedAt } = await pullCloudState(supabaseConfig, undefined, syncId, { signal: options.signal });
       if (!payload) {
         if (!options.silent) toast('云端暂无数据，可先上传本地数据');
         return;
       }
-      applyCloudPayload(payload);
       if (updatedAt) {
         setLastSyncedAt(updatedAt);
         localStorage.setItem('lastSyncedAt', updatedAt);
@@ -802,19 +625,8 @@ const Index = () => {
     }
     setIsSyncing(true);
     try {
-      const payload = {
-        apps,
-        todos,
-        componentSettings,
-        searchEngine,
-        onlineSuggestionsEnabled,
-        backgroundImage,
-        backgroundBrightness,
-        backgroundBlur,
-        backgroundOverlay,
-        themeMode,
-      };
-      await pushCloudState(supabaseConfig, payload, undefined, syncId);
+      const payload = captureFullSnapshot();
+      await pushCloudState(supabaseConfig, payload, undefined, syncId, { signal: options.signal });
       const now = new Date().toISOString();
       setLastSyncedAt(now);
       localStorage.setItem('lastSyncedAt', now);
@@ -828,25 +640,11 @@ const Index = () => {
     }
   };
 
-  const createConfigPayload = () => ({
-    apps,
-    todos,
-    componentSettings,
-    searchEngine,
-    onlineSuggestionsEnabled,
-    backgroundImage,
-    backgroundBrightness,
-    backgroundBlur,
-    backgroundOverlay,
-    themeMode,
-    bottomCount: localStorage.getItem('bottomCount'),
-    widgetPositions: localStorage.getItem('widget_positions'),
-    widgetPins: localStorage.getItem('widget_pins'),
-  });
+  const createConfigPayload = () => captureFullSnapshot();
 
   const handleExportConfig = () => {
     const content = JSON.stringify({
-      version: 1,
+      version: 2,
       exportedAt: new Date().toISOString(),
       data: createConfigPayload(),
     }, null, 2);
@@ -868,12 +666,8 @@ const Index = () => {
       if (!payload || !Array.isArray(payload.apps) || !Array.isArray(payload.todos)) {
         throw new Error('配置文件缺少 apps 或 todos');
       }
-      applyCloudPayload(payload);
-      if (payload.bottomCount != null) localStorage.setItem('bottomCount', String(payload.bottomCount));
-      if (typeof payload.widgetPositions === 'string') localStorage.setItem('widget_positions', payload.widgetPositions);
-      if (typeof payload.widgetPins === 'string') localStorage.setItem('widget_pins', payload.widgetPins);
-      toast('配置已导入，正在刷新页面');
-      setTimeout(() => window.location.reload(), 500);
+      importFullSnapshot(payload);
+      toast('配置已导入并立即生效，导入前数据已保留为恢复点');
     } catch (error) {
       toast(`导入失败：${error.message || '文件格式不正确'}`);
     }
@@ -1031,6 +825,7 @@ const Index = () => {
                     setActiveSuggestIndex(-1);
                   }}
                   onKeyDown={(e) => {
+                    if (isComposingEvent(e)) return;
                     if (!isSuggestOpen) {
                       return;
                     }
@@ -1161,22 +956,22 @@ const Index = () => {
         </div>
 
         {/* 底部应用导航 */}
-        <DraggableBottomBar apps={apps} setApps={setApps} />
+        <DraggableBottomBar key={workspaceId} apps={apps} setApps={setApps} />
 
         {/* 小组件：可拖动并记忆位置 */}
         {componentSettings.pomodoro && (
-          <DraggableWidget id="widget-pomodoro" defaultPos={{ x: 24, y: 24 }}>
+          <DraggableWidget key={workspaceId} id="widget-pomodoro" defaultPos={{ x: 24, y: 24 }}>
             <PomodoroTimer />
           </DraggableWidget>
         )}
         {componentSettings.heatmap && (
-          <DraggableWidget id="widget-heatmap" defaultPos={{ x: 24, y: 320 }}>
+          <DraggableWidget key={workspaceId} id="widget-heatmap" defaultPos={{ x: 24, y: 320 }}>
             <GitHubUsageHeatmap />
           </DraggableWidget>
         )}
         {componentSettings.todo && (
-          <DraggableWidget id="widget-todo" defaultPos={{ x: 24, y: 620 }}>
-            <TodoWidget todos={todos} onChange={setTodos} />
+          <DraggableWidget key={workspaceId} id="widget-todo" defaultPos={{ x: 24, y: 620 }}>
+            <TodoWidget />
           </DraggableWidget>
         )}
 
@@ -1314,7 +1109,7 @@ const Index = () => {
                 <Card className="mt-2 rounded-2xl">
                   <CardContent className="p-4">
                     <p className="mb-3 text-xs leading-relaxed text-gray-600 dark:text-gray-400">
-                      导出应用、待办、外观和组件布局；文件不包含 Supabase URL 或 anon key。
+                      导出全部工作区、文件夹、网站、待办和布局；不包含同步凭据。导入前会保存到多版本恢复历史；恢复与差异预览见下方。
                     </p>
                     <div className="flex flex-wrap gap-2">
                       <Button type="button" variant="secondary" className="rounded-2xl" onClick={handleExportConfig}>
@@ -1323,15 +1118,19 @@ const Index = () => {
                       <Button type="button" variant="outline" className="rounded-2xl" onClick={() => importConfigRef.current?.click()}>
                         <Upload className="mr-2 h-4 w-4" />导入配置
                       </Button>
+
                       <input ref={importConfigRef} type="file" accept="application/json,.json" className="hidden" onChange={handleImportConfig} />
                     </div>
                   </CardContent>
                 </Card>
               </div>
 
+              <div className={settingsSection === 'data' ? 'mt-6 rounded-2xl border p-4' : 'hidden'}>
+                <SyncControls cloudConfig={supabaseConfig} syncId={supabaseSyncId} autoSyncEnabled={autoSyncEnabled} onAutoSyncChange={setAutoSyncEnabled} />
+              </div>
               {/* 云同步 */}
               <div className={settingsSection === 'data' ? 'mt-6' : 'hidden'}>
-                <Label className="text-sm font-medium">云同步（Supabase 直连）</Label>
+                <Label className="text-sm font-medium">Supabase 连接配置（编辑会暂停自动同步）</Label>
                 <Card className="mt-2 rounded-2xl overflow-hidden">
                   <CardContent className="p-4 space-y-3">
                     <div className="grid gap-2">
@@ -1340,20 +1139,20 @@ const Index = () => {
                         inputMode="url"
                         placeholder="Supabase 项目 URL，如 https://xxx.supabase.co"
                         value={supabaseUrl}
-                        onChange={(e) => setSupabaseUrl(e.target.value)}
+                        onChange={(e) => { setAutoSyncEnabled(false); setSupabaseUrl(e.target.value); }}
                         className="rounded-2xl"
                       />
                       <Input
                         type="password"
                         placeholder="Supabase anon key"
                         value={supabaseAnonKey}
-                        onChange={(e) => setSupabaseAnonKey(e.target.value)}
+                        onChange={(e) => { setAutoSyncEnabled(false); setSupabaseAnonKey(e.target.value); }}
                         className="rounded-2xl"
                       />
                       <Input
                         placeholder="同步 ID（多个设备填同一个字符串即可共享数据）"
                         value={supabaseSyncId}
-                        onChange={(e) => setSupabaseSyncId(e.target.value)}
+                        onChange={(e) => { setAutoSyncEnabled(false); setSupabaseSyncId(e.target.value); }}
                         className="rounded-2xl"
                       />
                     </div>
@@ -1373,36 +1172,8 @@ const Index = () => {
                       >
                         保存配置
                       </Button>
-                      <Button
-                        variant={autoSyncEnabled ? "secondary" : "outline"}
-                        className="rounded-2xl"
-                        onClick={() => setAutoSyncEnabled(!autoSyncEnabled)}
-                      >
-                        {autoSyncEnabled ? '自动同步：开' : '自动同步：关'}
-                      </Button>
-                      <Button
-                        variant="outline"
-                        className="rounded-2xl"
-                        onClick={handlePullFromCloud}
-                        disabled={isSyncing}
-                      >
-                        <RefreshCcw className="h-4 w-4 mr-2" />
-                        从云端拉取
-                      </Button>
-                      <Button
-                        className="rounded-2xl"
-                        onClick={handlePushToCloud}
-                        disabled={isSyncing}
-                      >
-                        <Upload className="h-4 w-4 mr-2" />
-                        上传本地数据
-                      </Button>
                     </div>
-                    {lastSyncedAt && (
-                      <p className="text-xs text-gray-500 dark:text-gray-400">
-                        上次同步：{new Date(lastSyncedAt).toLocaleString('zh-CN')}
-                      </p>
-                    )}
+
                   </CardContent>
                 </Card>
               </div>
@@ -1509,6 +1280,7 @@ const Index = () => {
                       value={bgUrlInput}
                       onChange={(e) => setBgUrlInput(e.target.value)}
                       onKeyDown={(e) => {
+                    if (isComposingEvent(e)) return;
                         if (e.key === 'Enter') {
                           e.preventDefault();
                           applyBackgroundUrl();

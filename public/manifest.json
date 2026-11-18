@@ -17,7 +17,8 @@
     "bookmarks",
     "history",
     "tabs",
-    "topSites"
+    "topSites",
+    "tabGroups"
   ],
   "host_permissions": [
     "https://*.supabase.co/*",

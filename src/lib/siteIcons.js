@@ -1,5 +1,3 @@
-const ADVANCED_STATE_KEY = 'navinocode_advanced_state';
-
 export const ICON_MODE_AUTO = 'auto';
 export const ICON_MODE_CUSTOM = 'custom';
 export const ICON_MODE_LETTER = 'letter';
@@ -13,14 +11,6 @@ const AUTO_ICON_HOSTS = [
   ['chat.deepseek.com', '/svgs/deepseek.svg'],
   ['doubao.com', '/svgs/doubao.svg'],
 ];
-
-const safeParse = (value, fallback) => {
-  try {
-    return value ? JSON.parse(value) : fallback;
-  } catch {
-    return fallback;
-  }
-};
 
 const isHttpUrl = (value) => /^https?:\/\//i.test(String(value || ''));
 const isDataUrl = (value) => String(value || '').startsWith('data:');
@@ -162,54 +152,4 @@ export const getIconCandidates = (app) => {
     : [autoIcon];
 
   return [...new Set(candidates.filter(Boolean))];
-};
-
-const migrateList = (apps) => {
-  if (!Array.isArray(apps)) return { apps, changed: false, migrated: 0 };
-  let changed = false;
-  let migrated = 0;
-  const next = apps.map((app) => {
-    const normalized = normalizeAppIconRecord(app);
-    if (JSON.stringify(normalized) !== JSON.stringify(app)) {
-      changed = true;
-      migrated += 1;
-    }
-    return normalized;
-  });
-  return { apps: next, changed, migrated };
-};
-
-export const migrateStoredAppIcons = () => {
-  if (typeof window === 'undefined' || !window.localStorage) return { changed: false, migrated: 0 };
-
-  let changed = false;
-  let migrated = 0;
-  const storedApps = safeParse(localStorage.getItem('apps'), null);
-  const localResult = migrateList(storedApps);
-  if (localResult.changed) {
-    localStorage.setItem('apps', JSON.stringify(localResult.apps));
-    changed = true;
-    migrated += localResult.migrated;
-  }
-
-  const advanced = safeParse(localStorage.getItem(ADVANCED_STATE_KEY), null);
-  if (advanced && Array.isArray(advanced.workspaces)) {
-    let workspaceChanged = false;
-    const workspaces = advanced.workspaces.map((workspace) => {
-      const result = migrateList(workspace?.apps);
-      if (result.changed) {
-        workspaceChanged = true;
-        migrated += result.migrated;
-        return { ...workspace, apps: result.apps };
-      }
-      return workspace;
-    });
-
-    if (workspaceChanged) {
-      localStorage.setItem(ADVANCED_STATE_KEY, JSON.stringify({ ...advanced, workspaces }));
-      changed = true;
-    }
-  }
-
-  return { changed, migrated };
 };

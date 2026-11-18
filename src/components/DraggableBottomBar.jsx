@@ -1,12 +1,17 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { Button } from '@/components/ui/button';
 import { recordUsageEvent } from '@/lib/usageEvents';
-import AppSelector from '@/components/AppSelector';
+import { LayoutGrid } from 'lucide-react';
+import { useWorkspaceSetting } from '@/advanced/useWorkspaceStore';
 import { ContextMenu, ContextMenuTrigger, ContextMenuContent, ContextMenuItem } from '@/components/ui/context-menu';
 import EditAppDialog from '@/components/EditAppDialog';
 import { computeAppLetter } from '@/lib/utils';
+import { useWorkspaceStore } from '@/advanced/useWorkspaceStore';
+import { setWorkspaceApps, withUndo } from '@/advanced/storage';
+import { toast } from 'sonner';
 
 const DraggableBottomBar = ({ apps, setApps, maxBottomApps = 8 }) => {
+  const workspaceId = useWorkspaceStore().activeWorkspaceId;
   const [isDragging, setIsDragging] = useState(false);
   const [dragIndex, setDragIndex] = useState(null);
   const [targetIndex, setTargetIndex] = useState(null);
@@ -33,16 +38,10 @@ const DraggableBottomBar = ({ apps, setApps, maxBottomApps = 8 }) => {
   
   const containerRef = useRef(null);
   const selectorTriggerRef = useRef(null);
-  const [bottomCount, setBottomCount] = useState(() => {
-    try {
-      const saved = localStorage.getItem('bottomCount');
-      if (saved != null) {
-        const val = parseInt(saved, 10);
-        if (!Number.isNaN(val)) return Math.max(0, Math.min(val, apps.length, maxBottomApps));
-      }
-    } catch {}
-    return Math.min(apps.length, maxBottomApps);
-  });
+  const [storedBottomCount, setStoredBottomCount] = useWorkspaceSetting('bottomCount');
+  const bottomCount = Math.min(storedBottomCount, apps.length, maxBottomApps);
+  const setBottomCount = (value) => setStoredBottomCount((previous) => typeof value === 'function'
+    ? value(Math.min(previous, apps.length, maxBottomApps)) : value);
   const bottomApps = apps.slice(0, bottomCount);
   const [overSelector, setOverSelector] = useState(false);
   const [editApp, setEditApp] = useState(null);
@@ -261,7 +260,6 @@ const DraggableBottomBar = ({ apps, setApps, maxBottomApps = 8 }) => {
       });
       setBottomCount((v) => {
         const nv = Math.max(0, v - 1);
-        try { localStorage.setItem('bottomCount', String(nv)); } catch {}
         return nv;
       });
       setOverSelector(false);
@@ -289,7 +287,6 @@ const DraggableBottomBar = ({ apps, setApps, maxBottomApps = 8 }) => {
         });
         setBottomCount((v) => {
           const nv = Math.max(0, v - 1);
-          try { localStorage.setItem('bottomCount', String(nv)); } catch {}
           return nv;
         });
         setOverSelector(false);
@@ -522,53 +519,6 @@ const DraggableBottomBar = ({ apps, setApps, maxBottomApps = 8 }) => {
     };
   }, []);
 
-  // apps 或配置变化时，确保 bottomCount 合法并持久化
-  useEffect(() => {
-    // 先从 localStorage 读取最新值，避免与其他组件写入存在短暂不一致
-    let lsCount = null;
-    try {
-      const saved = localStorage.getItem('bottomCount');
-      if (saved != null) {
-        const val = parseInt(saved, 10);
-        if (!Number.isNaN(val)) lsCount = val;
-      }
-    } catch {}
-
-    setBottomCount((v) => {
-      const base = lsCount != null ? lsCount : v;
-      const nv = Math.min(Math.max(0, base), apps.length, maxBottomApps);
-      try { localStorage.setItem('bottomCount', String(nv)); } catch {}
-      return nv;
-    });
-  }, [apps.length, maxBottomApps]);
-
-  // 监听自定义事件：其他组件更新了 bottomCount（例如 AppSelector 增加到底栏）
-  useEffect(() => {
-    const onBottomCountChanged = (ev) => {
-      let next = null;
-      if (ev && ev.detail != null && !Number.isNaN(parseInt(ev.detail, 10))) {
-        next = parseInt(ev.detail, 10);
-      } else {
-        try {
-          const saved = localStorage.getItem('bottomCount');
-          if (saved != null) {
-            const val = parseInt(saved, 10);
-            if (!Number.isNaN(val)) next = val;
-          }
-        } catch {}
-      }
-      if (next != null) {
-        setBottomCount((v) => {
-          const nv = Math.min(Math.max(0, next), apps.length, maxBottomApps);
-          try { localStorage.setItem('bottomCount', String(nv)); } catch {}
-          return nv;
-        });
-      }
-    };
-    window.addEventListener('nocode:bottomCountChanged', onBottomCountChanged);
-    return () => window.removeEventListener('nocode:bottomCountChanged', onBottomCountChanged);
-  }, [apps.length, maxBottomApps]);
-
   const handleAppClick = (app, e) => {
     // 使用 ref 检测拖拽状态，避免事件时序问题
     if (hasDraggedRef.current) {
@@ -709,28 +659,22 @@ const DraggableBottomBar = ({ apps, setApps, maxBottomApps = 8 }) => {
                   <div className="grid gap-1">
                     <ContextMenuItem className="h-auto rounded-xl px-3 py-2 text-sm transition-all hover:bg-gray-50/60 focus:bg-gray-50/60 dark:hover:bg-gray-700/10 dark:focus:bg-gray-700/10" onSelect={() => { setEditApp(app); setIsEditOpen(true); suppressNativeContextRef.current = true; }}>编辑</ContextMenuItem>
                     <ContextMenuItem className="h-auto rounded-xl px-3 py-2 text-sm text-red-600 transition-all hover:bg-gray-50/60 focus:bg-gray-50/60 dark:text-red-400 dark:hover:bg-gray-700/10 dark:focus:bg-gray-700/10" onSelect={() => {
-                    // 从全部应用中删除该项；若该项在底栏内，同时减少 bottomCount
-                    setApps((prev) => prev.filter((a) => a.id !== app.id));
-                    setBottomCount((v) => {
-                      const nv = Math.max(0, v - 1);
-                      try { localStorage.setItem('bottomCount', String(nv)); } catch {}
-                      try { window.dispatchEvent(new CustomEvent('nocode:bottomCountChanged', { detail: String(nv) })); } catch {}
-                      return nv;
-                    });
+                    try {
+                      const undo = withUndo(() => setWorkspaceApps(workspaceId, (items) => items.filter((item) => item.id !== app.id)));
+                      toast('网站已删除', { action: { label: '撤销', onClick: () => { try { undo(); } catch (error) { toast.error(error.message); } } } });
+                    } catch (error) { toast.error(error.message); }
                     suppressNativeContextRef.current = true;
                   }}>删除</ContextMenuItem>
                   </div>
                 </ContextMenuContent>
               </ContextMenu>
             ))}
-            <AppSelector
-              apps={apps}
-              setApps={setApps}
-              triggerRef={selectorTriggerRef}
-              dropHighlight={isDragging && overSelector}
-              dockItemSize={iconSize}
-              dockIconSize={iconVisualSize}
-            />
+            <Button ref={selectorTriggerRef} type="button" variant="ghost" aria-label="整理网站" title="整理网站"
+              style={{ width: iconSize, height: iconSize }}
+              className={`shrink-0 rounded-xl ${isDragging && overSelector ? 'ring-2 ring-blue-400' : ''}`}
+              onClick={() => window.dispatchEvent(new CustomEvent('navinocode:open-library'))}>
+              <LayoutGrid style={{ width: iconVisualSize, height: iconVisualSize }} />
+            </Button>
           </div>
   </div>
   <EditAppDialog isOpen={isEditOpen} setIsOpen={setIsEditOpen} app={editApp} setApps={setApps} />

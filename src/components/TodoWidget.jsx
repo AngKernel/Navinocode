@@ -1,54 +1,51 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { Plus } from 'lucide-react';
+import { Plus, Trash2 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
+import { useWorkspaceSetting } from '@/advanced/useWorkspaceStore';
+import { makeId } from '@/advanced/workspaceModel';
+import { isComposingEvent } from '@/advanced/interactionUtils';
+import { useWorkspaceStore } from '@/advanced/useWorkspaceStore';
+import { setWorkspaceSetting, withUndo } from '@/advanced/storage';
+import { toast } from 'sonner';
 
-const TodoWidget = ({ todos: controlledTodos, onChange }) => {
-  const [localTodos, setLocalTodos] = useState(() => {
-    const savedTodos = localStorage.getItem('todos');
-    return savedTodos ? JSON.parse(savedTodos) : [
-      { id: 1, text: 'Hello World', completed: false }
-    ];
-  });
-  const todos = controlledTodos ?? localTodos;
-  const setTodos = onChange ?? setLocalTodos;
+const TodoWidget = () => {
+  const [todos, setTodos] = useWorkspaceSetting('todos');
+  const workspaceId = useWorkspaceStore().activeWorkspaceId;
+  const removeTodo = (id) => {
+    try {
+      const undo = withUndo(() => setWorkspaceSetting(workspaceId, 'todos', (items) => items.filter((item) => item.id !== id)));
+      toast('待办已删除', { action: { label: '撤销', onClick: () => { try { undo(); } catch (error) { toast.error(error.message); } } } });
+    } catch (error) { toast.error(error.message); }
+  };
+  const draftRef = useRef('');
   const [newTodo, setNewTodo] = useState('');
   const [showInput, setShowInput] = useState(false);
   const inputRef = useRef(null);
 
-  // 保存待办事项到本地存储
-  useEffect(() => {
-    if (!onChange) {
-      localStorage.setItem('todos', JSON.stringify(localTodos));
-    }
-  }, [localTodos, onChange]);
-
   const addTodo = () => {
-    if (newTodo.trim() !== '') {
-      setTodos([
-        ...todos,
-        {
-          id: Date.now(),
-          text: newTodo,
-          completed: false
-        }
-      ]);
-      setNewTodo('');
+    const text = draftRef.current.trim();
+    if (!text) return;
+    // Consume synchronously: Enter followed by blur must not add twice.
+    draftRef.current = '';
+    if (setTodos((items) => [...items, { id: makeId('todo'), text, completed: false }]) === false) {
+      draftRef.current = text; return false;
     }
+    setNewTodo('');
+    return true;
   };
 
   const toggleTodo = (id) => {
     setTodos(
-      todos.map(todo =>
+      (items) => items.map(todo =>
         todo.id === id ? { ...todo, completed: !todo.completed } : todo
       )
     );
   };
 
   const handleKeyPress = (e) => {
-    if (e.key === 'Enter') {
-      addTodo();
-      setShowInput(false);
+    if (e.key === 'Enter' && !isComposingEvent(e)) {
+      if (addTodo() !== false) setShowInput(false);
     }
   };
 
@@ -66,7 +63,7 @@ const TodoWidget = ({ todos: controlledTodos, onChange }) => {
   }, [showInput]);
 
   return (
-    <div className="apple-card rounded-3xl p-4 w-[300px] relative">
+    <div className="apple-card rounded-3xl p-4 pb-16 w-[300px] relative">
       <div className="space-y-2 max-h-60 overflow-y-auto">
         {todos.map((todo) => (
           <div 
@@ -108,6 +105,7 @@ const TodoWidget = ({ todos: controlledTodos, onChange }) => {
             >
               {todo.text}
             </span>
+            <Button type="button" size="icon" variant="ghost" className="h-7 w-7 shrink-0" aria-label={`删除待办 ${todo.text}`} onClick={() => removeTodo(todo.id)}><Trash2 className="h-3.5 w-3.5" /></Button>
           </div>
         ))}
       </div>
@@ -118,8 +116,8 @@ const TodoWidget = ({ todos: controlledTodos, onChange }) => {
             ref={inputRef}
             type="text"
             value={newTodo}
-            onChange={(e) => setNewTodo(e.target.value)}
-            onKeyPress={handleKeyPress}
+            onChange={(e) => { draftRef.current = e.target.value; setNewTodo(e.target.value); }}
+            onKeyDown={handleKeyPress}
             onBlur={handleInputBlur}
             placeholder="添加新任务..."
             className="flex-grow rounded-2xl apple-input text-sm focus:ring-0 focus:ring-offset-0 focus:outline-none focus-visible:ring-0 focus-visible:ring-offset-0"
